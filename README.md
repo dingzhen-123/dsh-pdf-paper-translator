@@ -22,6 +22,6 @@ https://github.com/dingzhen-123/dsh-pdf-paper-translator
 
 在 Windows Harness 的侧栏打开「PDF 文献翻译」，选好 PDF 后点击「准备并开始翻译」。环境就绪后会自动翻译已选的 PDF。
 
-Windows x64 完整包自带便携 Python、排版引擎和版面资源，首次使用时自动解包。普通版首次使用时自动下载排版组件、版面模型和字体。两种版本都使用 Harness 中选定的翻译模型。详见[插件使用说明](plugins/pdf-paper-translator/README.md)。
+GitHub Release 和 npm 的公开安装包在首次使用时自动下载排版组件、版面模型和字体。另有自带便携 Python 和排版资源的 Windows x64 本地测试包，首次使用时自动解包。两种安装方式都使用 Harness 中选定的翻译模型。[插件使用说明](plugins/pdf-paper-translator/README.md)
 
-仓库采用 [AGPL-3.0](LICENSE)。
+仓库采用 AGPL-3.0。公开包与本地测试包的内容、第三方许可和来源核查见分发审计。[项目许可](LICENSE) · [分发审计](docs/distribution-audit.md)

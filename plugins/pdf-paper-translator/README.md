@@ -44,7 +44,7 @@ dsh plugin --profile desktop add dsh-pdf-paper-translator
 
 ### 排版引擎
 
-如果拿到 Windows x64 完整包（文件名以 `-windows-x64.tgz` 结尾），可先完全退出 Harness，再在 PowerShell 用本地路径安装。
+如果已在本机生成 Windows x64 完整测试包（文件名以 `-windows-x64.tgz` 结尾），可先完全退出 Harness，再在 PowerShell 用本地路径安装。
 
 ~~~powershell
 dsh plugin --profile desktop add 'C:\下载\dsh-pdf-paper-translator-0.1.3-windows-x64.tgz'
@@ -70,4 +70,4 @@ $installer = Join-Path $dshHome 'profiles\desktop\node_modules\dsh-pdf-paper-tra
 
 ## 许可与依赖
 
-插件源码采用 [AGPL-3.0](../../LICENSE)。排版依赖为 [PDFMathTranslate-next](https://pypi.org/project/pdf2zh-next/2.10.2/) 和 [BabelDOC](https://github.com/funstory-ai/BabelDOC/blob/v0.7.1/LICENSE)，它们由用户单独安装。
+插件源码采用 AGPL-3.0。公开包首次使用时从上游下载排版依赖。本地完整测试包的组件清单和公开分发核查记录见分发审计。[项目许可](../../LICENSE) · [分发审计](../../docs/distribution-audit.md)

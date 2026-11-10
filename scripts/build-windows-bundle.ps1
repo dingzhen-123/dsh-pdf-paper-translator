@@ -23,7 +23,7 @@ $scratch = Join-Path $temp ('db-' + [guid]::NewGuid().ToString('N').Substring(0,
 $stage = Join-Path $scratch 'package'
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
-    foreach ($file in @('package.json', 'README.md', 'LICENSE', 'plugins')) {
+    foreach ($file in @('package.json', 'README.md', 'LICENSE', 'plugins', 'docs')) {
         Copy-Item -LiteralPath (Join-Path $repo $file) -Destination $stage -Recurse
     }
     $runtime = Join-Path $scratch 'runtime'
@@ -63,7 +63,11 @@ for group, entries in generate_all_assets_file_list().items():
     $payload = Join-Path $stage 'plugins\pdf-paper-translator\runtime'
     New-Item -ItemType Directory -Path $payload | Out-Null
     [IO.Compression.ZipFile]::CreateFromDirectory($runtime, (Join-Path $payload 'win32-x64.zip'))
-    $manifest = Get-Content -LiteralPath (Join-Path $stage 'package.json') -Raw | ConvertFrom-Json
+    # The runtime belongs only in the separate bundle staged by this script.
+    $manifestPath = Join-Path $stage 'package.json'
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest.files += 'plugins/pdf-paper-translator/runtime/win32-x64.zip'
+    $manifest | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $manifestPath -Encoding utf8
     $pack = npm.cmd pack $stage --ignore-scripts --json --pack-destination $scratch | ConvertFrom-Json
     if ($LASTEXITCODE) { throw 'Could not package the bundled plugin.' }
     $artifact = Join-Path $output "$($manifest.name)-$($manifest.version)-windows-x64.tgz"
