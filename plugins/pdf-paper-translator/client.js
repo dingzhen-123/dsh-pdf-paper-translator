@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@dingzhen-123/dsh-pdf-paper-translator',
+  id: 'dsh-pdf-paper-translator',
   factory(require) {
     const React = require('react')
     const { MenuGroup, rankByName } = require('@deepseek-ai/dsh-client-ui-primitives')
@@ -7,6 +7,13 @@ window.__ModuleLoader__.load({
     const { useCallback, useEffect, useRef, useState } = React
     const API = '/pdf-translate/api'
     const HEADERS = { 'x-dsh-pdf-translate': '1' }
+    const setupStages = {
+      check: '正在检查安装环境…',
+      python: '正在准备 Python 运行环境…',
+      packages: '正在下载并安装排版引擎…',
+      verify: '正在验证排版引擎…',
+      locked: '另一个窗口正在安装排版引擎…',
+    }
     const FOLDER_KEY = 'dsh-pdf-translate.output-folder'
     const languages = [
       ['en', '英语'], ['zh-CN', '简体中文'], ['ja', '日语'], ['de', '德语'], ['fr', '法语'],
@@ -375,6 +382,7 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
       const [busy, setBusy] = useState(false)
       const [over, setOver] = useState(false)
       const [ready, setReady] = useState(null)
+      const [requestingSetup, setRequestingSetup] = useState(false)
       const [modelChoice, setModelChoice] = useState('')
       const [folderChoice, setFolderChoice] = useState(() => {
         try { return localStorage.getItem(FOLDER_KEY) ?? '' } catch { return '' }
@@ -394,24 +402,48 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
         provider: group.id, model: model.id, name: model.name, key: modelKey(group.id, model.id),
       }))).find(model => model.key === (modelChoice || defaultKey))
       const folder = folderChoice.trim() || ready?.outputFolder || ''
+      const installing = ready?.setup?.state === 'installing'
 
       useEffect(() => {
         const request = new AbortController()
-        fetch(API, { headers: HEADERS, signal: request.signal })
-          .then(async response => {
+        let timer
+        async function loadStatus() {
+          try {
+            const response = await fetch(API, { headers: HEADERS, signal: request.signal })
             if (!response.ok) throw new Error()
             const data = await response.json()
             request.signal.throwIfAborted()
             setReady(data)
-          })
-          .catch(() => {
-            if (!request.signal.aborted) setError('暂时无法连接本机翻译服务。')
-          })
+            if (data.setup?.state === 'installing') timer = setTimeout(loadStatus, 1200)
+          } catch {
+            if (request.signal.aborted) return
+            if (installing) timer = setTimeout(loadStatus, 2500)
+            else setError('暂时无法连接本机翻译服务。')
+          }
+        }
+        void loadStatus()
         return () => {
           request.abort()
-          task.current?.abort()
+          clearTimeout(timer)
         }
-      }, [])
+      }, [installing])
+
+      useEffect(() => () => task.current?.abort(), [])
+
+      async function setupEngine() {
+        setRequestingSetup(true)
+        setError('')
+        try {
+          const response = await fetch(API + '?setup=install', { method: 'POST', headers: HEADERS })
+          const data = await response.json()
+          if (!response.ok) throw new Error(data.error)
+          setReady(data)
+        } catch (cause) {
+          setError(cause.message || '无法启动排版引擎安装，请重试。')
+        } finally {
+          setRequestingSetup(false)
+        }
+      }
 
       function updateQueue(next) {
         pending.current = next
@@ -596,7 +628,20 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
                     button('更改…', chooseFolder, { disabled: folderBusy }),
                     button('打开文件夹', () => openPath(folder, '无法打开输出文件夹，请检查路径。'), { disabled: !folder }))))),
             h('p', { className: 'dsh-pdf-hint' }, '本批文献使用相同设置，模型会自动判断原文语言。'),
-            ready && !ready.engine && h('p', { role: 'alert' }, '排版引擎尚未安装，请先运行插件附带的 setup-engine.ps1。'),
+            ready && !ready.engine && h('div', { 'aria-busy': installing || requestingSetup },
+              installing
+                ? h(React.Fragment, null,
+                  h('p', { className: 'dsh-pdf-hint', role: 'status' }, setupStages[ready.setup.stage]),
+                  h('div', { className: 'dsh-pdf-activity' }, h('progress', { 'aria-label': '排版引擎安装进度' })))
+                : h(React.Fragment, null,
+                  ready.setup?.error && h('p', { className: 'dsh-pdf-error', role: 'alert' }, ready.setup.error),
+                  h('p', { className: 'dsh-pdf-hint' }, ready.autoInstall
+                    ? '首次翻译需要排版引擎。点击安装会下载依赖，并安装到当前用户目录。'
+                    : '找不到排版引擎。请安装 pdf2zh_next 或检查 DSH_PDF2ZH_PATH 配置。'),
+                  ready.autoInstall && button(ready.setup?.error ? '重试安装' : '安装排版引擎', setupEngine,
+                    { disabled: requestingSetup }))),
+            ready?.engine && ready.setup?.state === 'ready' &&
+              h('p', { className: 'dsh-pdf-hint', role: 'status' }, '排版引擎已就绪，可以开始翻译。'),
             h('div', { className: 'dsh-pdf-actions' },
               h('button', {
                 type: 'submit', className: 'dsh-pdf-button dsh-pdf-primary',

@@ -1,6 +1,6 @@
 {
-  "name": "@dingzhen-123/dsh-pdf-paper-translator",
-  "version": "0.1.0",
+  "name": "dsh-pdf-paper-translator",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",

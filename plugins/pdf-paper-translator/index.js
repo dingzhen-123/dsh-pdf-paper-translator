@@ -4,7 +4,7 @@ import { pipeline } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { engineAvailable, json, readBytes, translatePdf } from './engine.js'
+import { canInstallEngine, engineAvailable, installEngine, json, readBytes, translatePdf } from './engine.js'
 
 export const inject = ['webServer', 'agentDefaultModel', 'llm']
 const API = '/pdf-translate/api'
@@ -76,6 +76,13 @@ export function apply(ctx) {
   ctx.effect(() => {
     let active
     let latestJob
+    let setup
+    async function status() {
+      return {
+        engine: setup?.state !== 'installing' && await engineAvailable(),
+        autoInstall: canInstallEngine(), setup, outputFolder: DEFAULT_FOLDER,
+      }
+    }
     const unregister = ctx.webServer.register({
       kind: 'exact',
       path: API,
@@ -92,8 +99,23 @@ export function apply(ctx) {
             if (latestJob?.id === jobId) json(res, 200, latestJob)
             else json(res, 404, { error: '找不到该翻译任务。' })
           } else {
-            json(res, 200, { engine: await engineAvailable(), outputFolder: DEFAULT_FOLDER })
+            json(res, 200, await status())
           }
+          return
+        }
+        if (req.method === 'POST' && url.searchParams.get('setup') === 'install') {
+          if (!canInstallEngine()) {
+            json(res, 409, { error: '当前环境需要手动配置排版引擎。' })
+            return
+          }
+          if (setup?.state !== 'installing') {
+            setup = { state: 'installing', stage: 'check' }
+            void installEngine(stage => { setup.stage = stage }).then(
+              () => { setup = { state: 'ready' } },
+              error => { setup = { state: 'error', error: error.message } },
+            )
+          }
+          json(res, 202, await status())
           return
         }
         if (req.method !== 'POST' || req.headers['content-type'] !== 'application/pdf') {
@@ -129,7 +151,9 @@ export function apply(ctx) {
         try {
           const options = readOptions(url)
           const returnFilePath = url.searchParams.get('delivery') === 'path'
-          if (!await engineAvailable()) throw new Error('PDF 排版引擎尚未安装。请运行 setup-engine.ps1。')
+          if (setup?.state === 'installing' || !await engineAvailable()) {
+            throw new Error('PDF 排版引擎尚未就绪。请先在翻译面板完成安装。')
+          }
           const route = await resolveModel(ctx, url.searchParams)
           const folder = returnFilePath || url.searchParams.has('folder')
             ? await resolveFolder(url.searchParams.get('folder') ?? '')

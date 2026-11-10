@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { access, open, readdir, writeFile } from 'node:fs/promises'
@@ -8,18 +9,64 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import os from 'node:os'
 
+const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+const engineDir = path.join(local, 'DshPdfTranslate', 'engine-2.10.2')
+
+export function canInstallEngine() {
+  return process.platform === 'win32' && !process.env.DSH_PDF2ZH_PATH
+}
+
 export function enginePath() {
-  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
   return process.env.DSH_PDF2ZH_PATH ||
     (process.platform === 'win32'
-      ? path.join(local, 'DshPdfTranslate', 'engine-2.10.2', 'Scripts', 'pdf2zh_next.exe')
+      ? path.join(engineDir, 'Scripts', 'pdf2zh_next.exe')
       : 'pdf2zh_next')
+}
+
+function accessible(file, mode) {
+  return access(file, mode).then(() => true, () => false)
 }
 
 export async function engineAvailable() {
   const command = enginePath()
-  if (!path.isAbsolute(command)) return true
-  return access(command).then(() => true, () => false)
+  if (canInstallEngine()) {
+    return !await accessible(engineDir + '.installing') &&
+      await accessible(command) && await accessible(path.join(engineDir, 'Scripts', 'python.exe'))
+  }
+  if (path.isAbsolute(command)) return accessible(command, constants.X_OK)
+  const name = process.platform === 'win32' && !path.extname(command) ? command + '.exe' : command
+  const directories = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
+  const candidates = await Promise.all(directories.map(directory => accessible(path.join(directory, name), constants.X_OK)))
+  return candidates.some(Boolean)
+}
+
+export async function installEngine(onStage) {
+  const errors = {
+    check: '无法准备安装目录。请检查当前用户目录的写入权限和可用空间。',
+    python: '无法准备 Python 运行环境。请检查网络后重试，也可以先安装 Python 3.12 或 3.13。',
+    packages: '下载或安装排版引擎失败。请检查网络和磁盘空间后重试。',
+    verify: '排版引擎安装后未能启动。请重试安装。',
+    locked: '另一个窗口正在安装排版引擎。请稍后重试。',
+  }
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const script = fileURLToPath(new URL('./setup-engine.ps1', import.meta.url))
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'))
+  env.PSModulePath = path.join(path.dirname(powershell), 'Modules')
+  env.LOCALAPPDATA = local
+  const child = spawn(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+    env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  let stage = 'check'
+  const progress = createInterface({ input: child.stdout })
+  progress.on('line', line => {
+    const match = /^DSH_PDF_SETUP (check|python|packages|verify|locked)$/.exec(line)
+    if (match) {
+      stage = match[1]
+      onStage(stage)
+    }
+  })
+  const [code] = await once(child, 'close').catch(() => { throw new Error('无法启动 Windows PowerShell。') })
+  if (code !== 0 || !await engineAvailable()) throw new Error(errors[stage])
 }
 
 export function json(res, status, data) {
@@ -135,11 +182,11 @@ async function runPdf2zh(args, directory, signal, onUpdate) {
   env.NO_PROXY = [env.NO_PROXY || env.no_proxy, '127.0.0.1', 'localhost'].filter(Boolean).join(',')
   env.no_proxy = env.NO_PROXY
   env.PYTHONUTF8 = '1'
-  const bundled = process.platform === 'win32' && !process.env.DSH_PDF2ZH_PATH
-  const executable = bundled ? path.join(path.dirname(enginePath()), 'python.exe') : enginePath()
+  const managed = canInstallEngine()
+  const executable = managed ? path.join(path.dirname(enginePath()), 'python.exe') : enginePath()
   const runner = fileURLToPath(new URL('./pdf-progress.py', import.meta.url))
-  const commandArgs = bundled ? ['-u', runner, ...args] : args
-  if (!bundled) onUpdate({ stage: 'process' })
+  const commandArgs = managed ? ['-u', runner, ...args] : args
+  if (!managed) onUpdate({ stage: 'process' })
   const child = spawn(executable, commandArgs, {
     cwd: directory, env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -165,7 +212,7 @@ async function runPdf2zh(args, directory, signal, onUpdate) {
   try {
     ;[code] = await once(child, 'close')
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('PDF 排版引擎尚未安装。请运行 setup-engine.ps1。')
+    if (error.code === 'ENOENT') throw new Error('找不到 PDF 排版引擎。请返回翻译面板检查安装状态。')
     throw error
   }
   return { code, diagnostics }
