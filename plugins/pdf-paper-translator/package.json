@@ -1,0 +1,28 @@
+{
+  "name": "@dingzhen-123/dsh-pdf-paper-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Translate research papers and save PDF files from the DeepSeek Harness desktop sidebar.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dingzhen-123/deepseek-harness-plugins.git",
+    "directory": "plugins/pdf-paper-translator"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": ["index.js", "engine.js", "pdf-progress.py", "client.js", "icon.svg", "locale/*.json", "cordis.patch.yml", "setup-engine.ps1"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "external": ["@deepseek-ai/dsh-client-ui-primitives"]
+    }
+  }
+}

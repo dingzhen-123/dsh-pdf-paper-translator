@@ -1,0 +1,3 @@
+- insert:
+    - id: pdf-translate
+      name: '@dingzhen-123/dsh-pdf-paper-translator'
