@@ -9,12 +9,9 @@ window.__ModuleLoader__.load({
     const HEADERS = { 'x-dsh-pdf-translate': '1' }
     const setupStages = {
       check: '正在检查安装环境…',
-      python: '正在准备 Python 运行环境…',
       bundled: '正在解包插件自带的排版组件…',
-      environment: '正在创建排版引擎的运行环境…',
-      connect: '正在连接下载源…',
-      packages: '正在解析和下载排版引擎依赖…',
-      writing: '正在写入排版引擎依赖…',
+      download: '正在从 GitHub 下载官方排版包…',
+      unpack: '正在解包官方排版组件…',
       verify: '正在验证排版引擎…',
       locked: '另一个窗口正在安装排版引擎…',
     }
@@ -439,6 +436,7 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
       }))).find(model => model.key === (modelChoice || defaultKey))
       const folder = folderChoice.trim() || ready?.outputFolder || ''
       const installing = ready?.setup?.state === 'installing'
+      const download = installing ? ready.download : null
 
       function updateEngine(status) {
         setSetupDisconnected(!status)
@@ -653,16 +651,17 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
               installing
                 ? h(React.Fragment, null,
                   h('p', { className: 'dsh-pdf-hint', role: 'status' }, setupStages[ready.setup.stage],
-                    ready.setup.source && ' 当前来源：' + ready.setup.source),
+                    download && ' ' + fileSize(download.downloaded) + ' / ' + fileSize(download.total)),
                   setupDisconnected && h('p', { className: 'dsh-pdf-hint', role: 'status' }, '暂时无法读取安装状态，正在重连。'),
-                  ready.setup.previousIssue && h('p', { className: 'dsh-pdf-hint' }, '上一次尝试：' + ready.setup.previousIssue),
-                  h('div', { className: 'dsh-pdf-activity' }, h('progress', { 'aria-label': '排版引擎安装进度' })))
+                  h('div', { className: 'dsh-pdf-activity' }, h('progress', {
+                    'aria-label': '排版引擎安装进度', max: download?.total, value: download?.downloaded,
+                  })))
                 : h(React.Fragment, null,
                   ready.setup?.error && h('p', { className: 'dsh-pdf-error', role: 'alert' }, ready.setup.error),
                   h('p', { className: 'dsh-pdf-hint' }, ready.autoInstall
                     ? (ready.bundledEngine
                       ? '首次使用会自动解包插件内的排版组件，准备完成后接着翻译。'
-                      : '首次使用会自动下载排版组件，准备完成后接着翻译。')
+                      : '首次使用会从 GitHub 下载约 607 MB 的官方排版包。下载并解包后自动翻译。')
                     : '找不到排版引擎。请安装 pdf2zh_next 或检查 DSH_PDF2ZH_PATH 配置。'))),
             h('div', { className: 'dsh-pdf-actions' },
               h('button', {

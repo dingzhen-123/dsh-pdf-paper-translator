@@ -4,7 +4,7 @@ import { pipeline } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { canInstallEngine, engineAvailable, hasBundledEngine, installEngine, json, readBytes, translatePdf } from './engine.js'
+import { canInstallEngine, engineAvailable, engineSetupProgress, hasBundledEngine, installEngine, json, readBytes, translatePdf } from './engine.js'
 
 export const inject = ['webServer', 'agentDefaultModel', 'llm']
 const API = '/pdf-translate/api'
@@ -81,6 +81,7 @@ export function apply(ctx) {
       return {
         engine: setup?.state !== 'installing' && await engineAvailable(),
         autoInstall: canInstallEngine(), bundledEngine: hasBundledEngine(), setup, outputFolder: DEFAULT_FOLDER,
+        download: setup?.stage === 'download' ? await engineSetupProgress() : undefined,
       }
     }
     const unregister = ctx.webServer.register({
@@ -135,7 +136,8 @@ export function apply(ctx) {
           return
         }
 
-        active = new AbortController()
+        const controller = new AbortController()
+        active = controller
         const job = { id: jobId, stage: 'upload', progress: null, usage: null }
         if (jobId) latestJob = job
         function updateJob(change) {
@@ -144,9 +146,9 @@ export function apply(ctx) {
             : job.progress
           Object.assign(job, change, { progress })
         }
-        const cancel = () => { if (!res.writableEnded) active?.abort() }
+        const cancel = () => { if (!res.writableEnded) controller.abort() }
         res.on('close', cancel)
-        const signal = AbortSignal.any([active.signal, AbortSignal.timeout(45 * 60_000)])
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(45 * 60_000)])
         let directory
         try {
           const options = readOptions(url)
@@ -195,8 +197,8 @@ export function apply(ctx) {
           }
         } finally {
           res.off('close', cancel)
-          if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
           active = undefined
+          if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
         }
       },
     })

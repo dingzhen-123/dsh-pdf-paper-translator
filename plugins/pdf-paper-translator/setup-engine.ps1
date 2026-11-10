@@ -1,15 +1,14 @@
-param([string]$Python)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Join-Path $env:LOCALAPPDATA 'DshPdfTranslate'
-$engineDir = Join-Path $root 'engine-2.10.2'
-$enginePython = Join-Path $engineDir 'Scripts\python.exe'
-$engine = Join-Path $engineDir 'Scripts\pdf2zh_next.exe'
-$marker = $engineDir + '.installing'
 $archivePath = Join-Path $PSScriptRoot 'runtime\win32-x64.zip'
 $bundleDir = Join-Path $root 'bundle-0.1.3'
-$hasBundle = Test-Path -LiteralPath $archivePath -PathType Leaf
-$lockPath = if ($hasBundle) { $bundleDir + '.lock' } else { $engineDir + '.lock' }
+$upstreamDir = Join-Path $root 'upstream-2.10.2-babeldoc-0.7.1'
+$upstreamZip = $upstreamDir + '.zip'
+$upstreamBytes = 607049119
+$upstreamHash = '7AC1811B0F82078A86BCCE88E185EFFF75FC55A3752C7F9C015186E5214B3C0B'
+$upstreamUrl = 'https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/releases/download/v2.10.2/pdf2zh-v2.10.2-BabelDOC-v0.7.1-with-assets-win64.zip'
+$lockPath = Join-Path $root 'portable-setup.lock'
 $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
 
@@ -28,78 +27,6 @@ function Assert-SetupDirectory([string]$Directory) {
             $item.Parent.FullName -ne (Resolve-Path -LiteralPath $root).ProviderPath) {
             throw 'The engine directory must be a regular directory inside the plugin data folder.'
         }
-    }
-}
-
-function Find-Python([string]$Command, [string[]]$Options = @()) {
-    $application = Get-Command -Name $Command -CommandType Application -ErrorAction SilentlyContinue |
-        Where-Object Source -NotLike '*\Microsoft\WindowsApps\*' | Select-Object -First 1
-    if (!$application) { return }
-    try {
-        $candidate = & $application.Source @Options -I -c 'import sys, struct, venv, ensurepip; assert sys.version_info[:2] in ((3, 12), (3, 13)) and struct.calcsize(''P'') == 8; print(sys.executable)' 2>$null
-        if ($LASTEXITCODE -eq 0) { $candidate | Select-Object -Last 1 }
-    } catch {
-        # Continue probing if a launcher or interpreter is incomplete.
-    }
-}
-
-function Get-ManagedPython {
-    $version = '3.13.17'
-    $runtime = Join-Path $root "python-$version-x64"
-    $executable = Join-Path $runtime 'python.exe'
-    $cached = Find-Python $executable
-    if ($cached) { return $cached }
-
-    Assert-SetupDirectory $runtime
-    $scratch = Join-Path $root ('python-download-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $scratch | Out-Null
-    try {
-        $archive = Join-Path $scratch 'python.nupkg'
-        $expected = 'DCE409744B088F94C6E37BA41F8100C384C27E029E843237364C602D30D475E5'
-        $sources = [ordered]@{
-            huawei = 'https://mirrors.huaweicloud.com/artifactory/api/nuget/v3/nuget-remote'
-            nuget = 'https://api.nuget.org/v3-flatcontainer'
-        }
-        $verified = $false
-        foreach ($source in $sources.Keys) {
-            [Console]::WriteLine("DSH_PDF_SETUP python $source")
-            $uri = "$($sources[$source])/python/$version/python.$version.nupkg"
-            & $curl --fail --location --silent --connect-timeout 8 --max-time 120 --output $archive $uri
-            if ($LASTEXITCODE) {
-                [Console]::WriteLine("DSH_PDF_SETUP issue $source unreachable")
-                continue
-            }
-            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
-                [Console]::WriteLine("DSH_PDF_SETUP issue $source checksum")
-                continue
-            }
-            $verified = $true
-            break
-        }
-        if (!$verified) { throw 'Could not download and verify the Python runtime.' }
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $unpacked = Join-Path $scratch 'unpacked'
-        try {
-            [IO.Compression.ZipFile]::ExtractToDirectory($archive, $unpacked)
-        } catch {
-            [Console]::WriteLine("DSH_PDF_SETUP issue $source extract")
-            throw
-        }
-        $tools = Join-Path $unpacked 'tools'
-        if (!(Find-Python (Join-Path $tools 'python.exe'))) {
-            [Console]::WriteLine("DSH_PDF_SETUP issue $source launch")
-            throw 'The downloaded Python runtime could not start.'
-        }
-        Remove-SetupScratch $runtime
-        try {
-            [IO.Directory]::Move($tools, $runtime)
-        } catch {
-            [Console]::WriteLine("DSH_PDF_SETUP issue $source permission")
-            throw
-        }
-        return $executable
-    } finally {
-        Remove-SetupScratch $scratch
     }
 }
 
@@ -148,15 +75,6 @@ function Invoke-SetupProcess([string]$Executable, [string[]]$Arguments, [int]$Li
     }
 }
 
-function New-EngineEnvironment([string]$Interpreter, [string]$Source) {
-    [Console]::WriteLine("DSH_PDF_SETUP environment $Source")
-    Assert-SetupDirectory $engineDir
-    $arguments = @('-I', '-m', 'venv', '--clear', ('"' + $engineDir + '"'))
-    $result = Invoke-SetupProcess $Interpreter $arguments 180
-    if ($result -ne 'ok') { [Console]::WriteLine("DSH_PDF_SETUP issue $Source $result") }
-    return $result
-}
-
 function Test-BundledEngine([string]$Directory) {
     return (Test-Path -LiteralPath (Join-Path $Directory 'python\python.exe') -PathType Leaf) -and
         (Test-Path -LiteralPath (Join-Path $Directory 'assets\models\doclayout_yolo_docstructbench_imgsz1024.onnx') -PathType Leaf)
@@ -182,43 +100,91 @@ function Install-BundledEngine {
     }
 }
 
-function Install-EnginePackages {
-    $sources = [ordered]@{
-        tuna = 'https://pypi.tuna.tsinghua.edu.cn/simple'
-        pypi = 'https://pypi.org/simple'
-    }
-    $wheelhouse = Join-Path $root ('engine-wheels-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $wheelhouse | Out-Null
-    $wheelArgument = '"' + $wheelhouse + '"'
-    $pip = @('-u', '-m', 'pip', '--isolated', '--disable-pip-version-check', '--no-input')
-    $requirement = 'pdf2zh-next==2.10.2'
-    try {
-        foreach ($source in $sources.Keys) {
-            $index = $sources[$source]
-            [Console]::WriteLine("DSH_PDF_SETUP connect $source")
-            & $curl --fail --location --silent --connect-timeout 5 --max-time 8 --output NUL "$index/pdf2zh-next/"
-            if ($LASTEXITCODE) {
-                [Console]::WriteLine("DSH_PDF_SETUP issue $source unreachable")
-                continue
-            }
-            [Console]::WriteLine("DSH_PDF_SETUP packages $source")
-            $download = @('download', '--only-binary=:all:', '--progress-bar', 'raw', '--retries', '0', '--timeout', '15',
-                '--dest', $wheelArgument, '--index-url', $index, $requirement)
-            $result = Invoke-SetupProcess $enginePython ($pip + $download) 360 90
-            if ($result -eq 'ok') {
-                [Console]::WriteLine("DSH_PDF_SETUP writing $source")
-                $install = @('install', '--no-index', '--find-links', $wheelArgument, $requirement)
-                $result = Invoke-SetupProcess $enginePython ($pip + $install) 600
-                if ($result -eq 'ok') { return }
-                [Console]::WriteLine("DSH_PDF_SETUP issue $source $result")
-                break
-            }
-            [Console]::WriteLine("DSH_PDF_SETUP issue $source $result")
-            if ($result -in @('disk', 'permission')) { break }
+function Get-UpstreamArchive {
+    Write-Output 'DSH_PDF_SETUP download'
+    $length = 0
+    if (Test-Path -LiteralPath $upstreamZip) {
+        $archive = Get-Item -LiteralPath $upstreamZip -Force
+        if ($archive.PSIsContainer -or ($archive.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'The download path must be a regular file.'
         }
-        throw 'Could not install PDFMathTranslate-next.'
+        $length = $archive.Length
+        if ($length -gt $upstreamBytes) {
+            Remove-Item -LiteralPath $upstreamZip
+            $length = 0
+        }
+    }
+
+    if ($length -lt $upstreamBytes) {
+        $options = @('--fail', '--location', '--silent', '--show-error', '--proto', '=https', '--proto-redir', '=https',
+            '--connect-timeout', '12', '--max-time', '900', '--speed-limit', '1024', '--speed-time', '75',
+            '--max-filesize', [string]$upstreamBytes, '--output', $upstreamZip)
+        $resume = if ($length -gt 0) { @('--continue-at', '-') } else { @() }
+        & $curl @options @resume $upstreamUrl
+        $downloadExitCode = $LASTEXITCODE
+        if ($downloadExitCode -eq 33 -and $length -gt 0) {
+            Remove-Item -LiteralPath $upstreamZip
+            & $curl @options $upstreamUrl
+            $downloadExitCode = $LASTEXITCODE
+        }
+        if ($downloadExitCode -ne 0) {
+            $reason = switch ($downloadExitCode) { 23 { 'disk' } 28 { 'timeout' } default { 'network' } }
+            Write-Output "DSH_PDF_SETUP issue $reason"
+            throw 'The upstream package could not be downloaded.'
+        }
+    }
+
+    if ((Get-Item -LiteralPath $upstreamZip).Length -ne $upstreamBytes -or
+        (Get-FileHash -LiteralPath $upstreamZip -Algorithm SHA256).Hash -ne $upstreamHash) {
+        Remove-Item -LiteralPath $upstreamZip
+        Write-Output 'DSH_PDF_SETUP issue checksum'
+        throw 'The upstream package did not match the pinned release digest.'
+    }
+}
+
+function Install-UpstreamEngine {
+    Assert-SetupDirectory $upstreamDir
+    Get-UpstreamArchive
+    Write-Output 'DSH_PDF_SETUP unpack'
+    $scratch = Join-Path $root ('up-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($upstreamZip, $scratch)
+        $distribution = $scratch
+        if (!(Test-Path -LiteralPath (Join-Path $distribution 'runtime') -PathType Container)) {
+            $directories = @(Get-ChildItem -LiteralPath $scratch -Directory)
+            if ($directories.Count -eq 1) { $distribution = $directories[0].FullName }
+        }
+        $embedded = Join-Path $distribution 'runtime'
+        $sitePackages = Join-Path $distribution 'site-packages'
+        $assetsZip = @(Get-ChildItem -LiteralPath $distribution -Filter 'offline_assets_*.zip' -File)
+        if (!(Test-Path -LiteralPath (Join-Path $embedded 'python.exe') -PathType Leaf) -or
+            !(Test-Path -LiteralPath (Join-Path $sitePackages 'pdf2zh_next') -PathType Container) -or $assetsZip.Count -ne 1) {
+            throw 'The official Windows package is missing its Python, engine or offline assets.'
+        }
+
+        $prepared = Join-Path $scratch 'prepared'
+        New-Item -ItemType Directory -Path $prepared | Out-Null
+        $pythonDir = Join-Path $prepared 'python'
+        [IO.Directory]::Move($embedded, $pythonDir)
+        [IO.Directory]::Move($sitePackages, (Join-Path $pythonDir 'site-packages'))
+        $embeddedPath = Join-Path $pythonDir 'python313._pth'
+        if (Test-Path -LiteralPath $embeddedPath -PathType Leaf) {
+            $modulePaths = @(Get-Content -LiteralPath $embeddedPath) + 'site-packages'
+            Set-Content -LiteralPath $embeddedPath -Value $modulePaths -Encoding ASCII
+        }
+        [IO.Compression.ZipFile]::ExtractToDirectory($assetsZip[0].FullName, (Join-Path $prepared 'assets'))
+        if (!(Test-BundledEngine $prepared)) { throw 'The extracted offline assets are incomplete.' }
+
+        Write-Output 'DSH_PDF_SETUP verify'
+        $python = Join-Path $pythonDir 'python.exe'
+        $probe = @('-I', '-B', '-c', '"import onnxruntime, pymupdf, pdf2zh_next; from importlib.metadata import version; assert version(''pdf2zh-next'') == ''2.10.2'' and version(''BabelDOC'') == ''0.7.1''"')
+        if ((Invoke-SetupProcess $python $probe 60) -ne 'ok') { throw 'The official engine could not start.' }
+        Remove-SetupScratch $upstreamDir
+        [IO.Directory]::Move($prepared, $upstreamDir)
+        Remove-Item -LiteralPath $upstreamZip -ErrorAction SilentlyContinue
     } finally {
-        Remove-SetupScratch $wheelhouse
+        Remove-SetupScratch $scratch
     }
 }
 
@@ -232,39 +198,9 @@ try {
 }
 
 try {
-    if ($hasBundle) {
-        Install-BundledEngine
-        return
-    }
-    $retry = Test-Path -LiteralPath $marker
-    if (!$retry -and (Test-Path -LiteralPath $engine) -and
-        (Test-Path -LiteralPath $enginePython)) { return }
-    New-Item -ItemType File -Path $marker -Force | Out-Null
-
-    Write-Output 'DSH_PDF_SETUP python'
-    if ($retry -or !(Find-Python $enginePython)) {
-        $basePython = if ($Python) {
-            Find-Python $Python
-        } else {
-            Find-Python 'py.exe' @('-3.13')
-        }
-        if (!$basePython -and !$Python) { $basePython = Find-Python 'py.exe' @('-3.12') }
-        if (!$basePython -and !$Python) { $basePython = Find-Python 'python.exe' }
-        if (!$basePython -and $Python) { throw 'Use a 64-bit Python 3.12 or 3.13 executable.' }
-        $result = if ($basePython) { New-EngineEnvironment $basePython 'system' } else { 'missing' }
-        if ($result -ne 'ok' -and !$Python -and $result -notin @('disk', 'busy')) {
-            Write-Output 'DSH_PDF_SETUP python'
-            $managedPython = Get-ManagedPython
-            $result = New-EngineEnvironment $managedPython 'portable'
-        }
-        if ($result -ne 'ok') { throw 'Could not create the engine virtual environment.' }
-    }
-
-    Install-EnginePackages
-
-    Write-Output 'DSH_PDF_SETUP verify'
-    if ((Invoke-SetupProcess $engine @('--version') 60) -ne 'ok') { throw 'PDFMathTranslate-next could not start.' }
-    Remove-Item -LiteralPath $marker
+    if ((Test-BundledEngine $bundleDir) -or (Test-BundledEngine $upstreamDir)) { return }
+    if (Test-Path -LiteralPath $archivePath -PathType Leaf) { Install-BundledEngine }
+    else { Install-UpstreamEngine }
 } finally {
     $lock.Dispose()
 }

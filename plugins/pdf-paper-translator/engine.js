@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants, existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { access, open, readdir, writeFile } from 'node:fs/promises'
+import { access, open, readdir, stat, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -12,65 +12,68 @@ import os from 'node:os'
 const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
 const engineDir = path.join(local, 'DshPdfTranslate', 'engine-2.10.2')
 const runtimeDir = path.join(local, 'DshPdfTranslate', 'bundle-0.1.3')
-const bundledPython = path.join(runtimeDir, 'python', 'python.exe')
-const bundled = process.platform === 'win32' && process.arch === 'x64' &&
-  !process.env.DSH_PDF2ZH_PATH && existsSync(fileURLToPath(new URL('./runtime/win32-x64.zip', import.meta.url)))
+const upstreamDir = path.join(local, 'DshPdfTranslate', 'upstream-2.10.2-babeldoc-0.7.1')
+const upstreamDownload = upstreamDir + '.zip'
+const upstreamBytes = 607_049_119
 
 export function canInstallEngine() {
-  return process.platform === 'win32' && !process.env.DSH_PDF2ZH_PATH
+  return process.platform === 'win32' && process.arch === 'x64' && !process.env.DSH_PDF2ZH_PATH
 }
 
 export function hasBundledEngine() {
-  return bundled
+  return canInstallEngine() && existsSync(fileURLToPath(new URL('./runtime/win32-x64.zip', import.meta.url)))
 }
 
-export function enginePath() {
-  return process.env.DSH_PDF2ZH_PATH || (bundled ? bundledPython :
-    (process.platform === 'win32'
-      ? path.join(engineDir, 'Scripts', 'pdf2zh_next.exe')
-      : 'pdf2zh_next'))
+export async function engineSetupProgress() {
+  const downloaded = (await stat(upstreamDownload).catch(() => null))?.size ?? 0
+  return { downloaded: Math.min(downloaded, upstreamBytes), total: upstreamBytes }
 }
 
 function accessible(file, mode) {
   return access(file, mode).then(() => true, () => false)
 }
 
-export async function engineAvailable() {
-  const command = enginePath()
-  if (bundled) return await accessible(bundledPython) &&
-    accessible(path.join(runtimeDir, 'assets', 'models', 'doclayout_yolo_docstructbench_imgsz1024.onnx'))
+async function selectedEngine() {
   if (canInstallEngine()) {
-    return !await accessible(engineDir + '.installing') &&
-      await accessible(command) && await accessible(path.join(engineDir, 'Scripts', 'python.exe'))
+    for (const directory of [runtimeDir, upstreamDir]) {
+      const executable = path.join(directory, 'python', 'python.exe')
+      const assets = path.join(directory, 'assets')
+      if (await accessible(executable) &&
+          await accessible(path.join(assets, 'models', 'doclayout_yolo_docstructbench_imgsz1024.onnx'))) {
+        return { executable, assets, managed: true }
+      }
+    }
+    const executable = path.join(engineDir, 'Scripts', 'python.exe')
+    if (!await accessible(engineDir + '.installing') && await accessible(executable) &&
+        await accessible(path.join(engineDir, 'Scripts', 'pdf2zh_next.exe'))) {
+      return { executable, managed: true }
+    }
+    return null
   }
-  if (path.isAbsolute(command)) return accessible(command, constants.X_OK)
+  const command = process.env.DSH_PDF2ZH_PATH || 'pdf2zh_next'
+  if (path.isAbsolute(command)) return await accessible(command, constants.X_OK) ? { executable: command } : null
   const name = process.platform === 'win32' && !path.extname(command) ? command + '.exe' : command
   const directories = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
   const candidates = await Promise.all(directories.map(directory => accessible(path.join(directory, name), constants.X_OK)))
-  return candidates.some(Boolean)
+  return candidates.some(Boolean) ? { executable: command } : null
+}
+
+export async function engineAvailable() {
+  return Boolean(await selectedEngine())
 }
 
 export async function installEngine(onStage) {
   const errors = {
     check: '无法准备安装目录。请检查当前用户目录的写入权限和可用空间。',
-    python: '无法准备便携运行时。请检查网络和可用空间后重试。',
+    download: '无法下载 PDFMathTranslate-next 官方排版包。请确认可以访问 GitHub Releases 后重试。',
     bundled: '无法解包插件自带的排版组件。请检查当前用户目录的写入权限和可用空间后重试。',
-    environment: '无法创建排版环境。请检查当前用户目录的写入权限和可用空间后重试。',
-    connect: '无法连接排版引擎下载源。请检查网络后重试。',
-    packages: '下载或安装排版引擎失败。请检查网络和磁盘空间后重试。',
-    writing: '写入排版引擎依赖失败。请检查磁盘空间和当前用户目录的写入权限后重试。',
+    unpack: '无法解包官方排版组件。请检查当前用户目录的写入权限和可用空间后重试。',
     verify: '排版引擎安装后未能启动。请重试安装。',
     locked: '另一个窗口正在安装排版引擎。请稍后重试。',
   }
-  const sources = {
-    tuna: '清华 PyPI 镜像', pypi: 'PyPI 官方源', huawei: '华为云 NuGet 镜像', nuget: 'NuGet 官方源',
-    system: '本机 Python', portable: '便携运行时',
-  }
   const reasons = {
-    unreachable: '连接失败', timeout: '安装超时', network: '下载连接中断',
-    missing: '缺少匹配的依赖', disk: '磁盘空间不足', permission: '安装目录不可写',
-    checksum: '运行时校验失败', extract: '运行时解包失败', launch: '运行时无法启动',
-    busy: '安装文件正被占用', failed: '安装失败',
+    checksum: '下载文件校验失败。', disk: '下载目录无法写入，请检查磁盘空间。',
+    timeout: '下载长时间没有数据或超过时间上限。', network: '下载连接失败或中断。',
   }
   const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const script = fileURLToPath(new URL('./setup-engine.ps1', import.meta.url))
@@ -81,25 +84,21 @@ export async function installEngine(onStage) {
     env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
   })
   let stage = 'check'
-  const issues = []
+  let issue
   const progress = createInterface({ input: child.stdout })
   progress.on('line', line => {
-    const match = /^DSH_PDF_SETUP (check|python|bundled|environment|connect|packages|writing|verify|locked|issue)(?: (tuna|pypi|huawei|nuget|system|portable))?(?: (\w+))?$/.exec(line)
+    const match = /^DSH_PDF_SETUP (check|download|bundled|unpack|verify|locked|issue)(?: (\w+))?$/.exec(line)
     if (!match) return
-    const [, event, source, reason] = match
-    if (event === 'issue') {
-      if (sources[source] && reasons[reason]) issues.push(`${sources[source]}：${reasons[reason]}`)
-    } else {
-      if (['python', 'environment'].includes(stage) && event === 'connect') issues.length = 0
+    const [, event, reason] = match
+    if (event === 'issue') issue = reasons[reason]
+    else {
       stage = event
-      onStage({ stage, source: sources[source], previousIssue: source ? issues.at(-1) : undefined })
+      onStage({ stage })
     }
   })
   const [code] = await once(child, 'close').catch(() => { throw new Error('无法启动 Windows PowerShell。') })
   if (code !== 0 || !await engineAvailable()) {
-    const details = ['python', 'environment', 'connect', 'packages', 'writing'].includes(stage) && issues.length
-      ? issues.join('；') + '。' : ''
-    throw new Error(details + errors[stage])
+    throw new Error((stage === 'download' ? issue ?? '' : '') + errors[stage])
   }
 }
 
@@ -217,13 +216,13 @@ async function runPdf2zh(args, directory, signal, onUpdate) {
   env.NO_PROXY = [env.NO_PROXY || env.no_proxy, '127.0.0.1', 'localhost'].filter(Boolean).join(',')
   env.no_proxy = env.NO_PROXY
   env.PYTHONUTF8 = '1'
-  const managed = bundled || canInstallEngine()
-  const executable = bundled ? bundledPython : (managed ? path.join(engineDir, 'Scripts', 'python.exe') : enginePath())
+  const engine = await selectedEngine()
+  if (!engine) throw new Error('找不到 PDF 排版引擎。请返回翻译面板检查安装状态。')
   const runner = fileURLToPath(new URL('./pdf-progress.py', import.meta.url))
-  if (bundled) env.DSH_PDF_BUNDLED_ASSETS = path.join(runtimeDir, 'assets')
-  const commandArgs = managed ? ['-u', ...(bundled ? ['-I', '-B', '-X', 'utf8'] : []), runner, ...args] : args
-  if (!managed) onUpdate({ stage: 'process' })
-  const child = spawn(executable, commandArgs, {
+  if (engine.assets) env.DSH_PDF_BUNDLED_ASSETS = engine.assets
+  const commandArgs = engine.managed ? ['-u', ...(engine.assets ? ['-I', '-B', '-X', 'utf8'] : []), runner, ...args] : args
+  if (!engine.managed) onUpdate({ stage: 'process' })
+  const child = spawn(engine.executable, commandArgs, {
     cwd: directory, env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let diagnostics = ''
