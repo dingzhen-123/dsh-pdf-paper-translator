@@ -14,9 +14,15 @@
 
 ## Windows 安装
 
-已在 DeepSeek Harness Desktop 0.2.1-rc.5 的 `desktop` 配置验证。需要 Git、Harness 的 `dsh` 命令，以及 Python 3.12 或 3.13。若 `dsh` 未加入 PATH，使用 Harness 安装目录下的 `resources\runtime\cli\bin\dsh.cmd` 完整路径。
+安装示例使用 DeepSeek Harness Desktop 的 `desktop` 配置，安装命令已用 0.2.1-rc.5 随附的 CLI 验证。若 `dsh` 未加入 PATH，使用 Harness 安装目录下的 `resources\runtime\cli\bin\dsh.cmd` 完整路径。
 
-先完全退出 Harness，然后在 PowerShell 运行下列命令。`setup-engine.ps1` 从 PyPI 将 PDFMathTranslate-next 2.10.2 安装到用户本地的独立 Python 环境。
+先完全退出 Harness。如果已经装好下文的排版引擎，可直接从 GitHub 安装插件。
+
+~~~powershell
+dsh plugin --profile desktop add 'github:dingzhen-123/deepseek-harness-plugins#path:/plugins/pdf-paper-translator'
+~~~
+
+如果还没有排版引擎，请准备 Git 和 Python 3.12 或 3.13，再在 PowerShell 运行下列命令。`setup-engine.ps1` 从 PyPI 将 PDFMathTranslate-next 2.10.2 安装到用户本地的独立 Python 环境。
 
 ~~~powershell
 git clone https://github.com/dingzhen-123/deepseek-harness-plugins.git
