@@ -44,9 +44,17 @@ export async function installEngine(onStage) {
   const errors = {
     check: '无法准备安装目录。请检查当前用户目录的写入权限和可用空间。',
     python: '无法准备 Python 运行环境。请检查网络后重试，也可以先安装 Python 3.12 或 3.13。',
+    connect: '无法连接排版引擎下载源。请检查网络后重试。',
     packages: '下载或安装排版引擎失败。请检查网络和磁盘空间后重试。',
+    writing: '写入排版引擎依赖失败。请检查磁盘空间和当前用户目录的写入权限后重试。',
     verify: '排版引擎安装后未能启动。请重试安装。',
     locked: '另一个窗口正在安装排版引擎。请稍后重试。',
+  }
+  const sources = { tuna: '清华 PyPI 镜像', pypi: 'PyPI 官方源', huawei: '华为云 NuGet 镜像', nuget: 'NuGet 官方源' }
+  const reasons = {
+    unreachable: '连接失败', timeout: '安装超时', network: '下载连接中断',
+    missing: '缺少匹配的依赖', disk: '磁盘空间不足', permission: '安装目录不可写',
+    checksum: '运行时校验失败', failed: '安装失败',
   }
   const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const script = fileURLToPath(new URL('./setup-engine.ps1', import.meta.url))
@@ -57,16 +65,26 @@ export async function installEngine(onStage) {
     env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
   })
   let stage = 'check'
+  const issues = []
   const progress = createInterface({ input: child.stdout })
   progress.on('line', line => {
-    const match = /^DSH_PDF_SETUP (check|python|packages|verify|locked)$/.exec(line)
-    if (match) {
-      stage = match[1]
-      onStage(stage)
+    const match = /^DSH_PDF_SETUP (check|python|connect|packages|writing|verify|locked|issue)(?: (tuna|pypi|huawei|nuget))?(?: (\w+))?$/.exec(line)
+    if (!match) return
+    const [, event, source, reason] = match
+    if (event === 'issue') {
+      if (sources[source] && reasons[reason]) issues.push(`${sources[source]}：${reasons[reason]}`)
+    } else {
+      if (stage === 'python' && event !== 'python') issues.length = 0
+      stage = event
+      onStage({ stage, source: sources[source], previousIssue: source ? issues.at(-1) : undefined })
     }
   })
   const [code] = await once(child, 'close').catch(() => { throw new Error('无法启动 Windows PowerShell。') })
-  if (code !== 0 || !await engineAvailable()) throw new Error(errors[stage])
+  if (code !== 0 || !await engineAvailable()) {
+    const details = ['python', 'connect', 'packages', 'writing'].includes(stage) && issues.length
+      ? issues.join('；') + '。' : ''
+    throw new Error(details + errors[stage])
+  }
 }
 
 export function json(res, status, data) {

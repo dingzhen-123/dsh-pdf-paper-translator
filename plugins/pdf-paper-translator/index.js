@@ -110,7 +110,7 @@ export function apply(ctx) {
           }
           if (setup?.state !== 'installing') {
             setup = { state: 'installing', stage: 'check' }
-            void installEngine(stage => { setup.stage = stage }).then(
+            void installEngine(update => { Object.assign(setup, update) }).then(
               () => { setup = { state: 'ready' } },
               error => { setup = { state: 'error', error: error.message } },
             )

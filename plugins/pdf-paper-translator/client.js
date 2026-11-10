@@ -10,7 +10,9 @@ window.__ModuleLoader__.load({
     const setupStages = {
       check: '正在检查安装环境…',
       python: '正在准备 Python 运行环境…',
-      packages: '正在下载并安装排版引擎…',
+      connect: '正在连接下载源…',
+      packages: '正在解析和下载排版引擎依赖…',
+      writing: '正在写入排版引擎依赖…',
       verify: '正在验证排版引擎…',
       locked: '另一个窗口正在安装排版引擎…',
     }
@@ -383,6 +385,7 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
       const [over, setOver] = useState(false)
       const [ready, setReady] = useState(null)
       const [requestingSetup, setRequestingSetup] = useState(false)
+      const [setupDisconnected, setSetupDisconnected] = useState(false)
       const [modelChoice, setModelChoice] = useState('')
       const [folderChoice, setFolderChoice] = useState(() => {
         try { return localStorage.getItem(FOLDER_KEY) ?? '' } catch { return '' }
@@ -409,16 +412,20 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
         let timer
         async function loadStatus() {
           try {
-            const response = await fetch(API, { headers: HEADERS, signal: request.signal })
+            const signal = AbortSignal.any([request.signal, AbortSignal.timeout(8000)])
+            const response = await fetch(API, { headers: HEADERS, signal })
             if (!response.ok) throw new Error()
             const data = await response.json()
             request.signal.throwIfAborted()
+            setSetupDisconnected(false)
             setReady(data)
             if (data.setup?.state === 'installing') timer = setTimeout(loadStatus, 1200)
           } catch {
             if (request.signal.aborted) return
-            if (installing) timer = setTimeout(loadStatus, 2500)
-            else setError('暂时无法连接本机翻译服务。')
+            if (installing) {
+              setSetupDisconnected(true)
+              timer = setTimeout(loadStatus, 2500)
+            } else setError('暂时无法连接本机翻译服务。')
           }
         }
         void loadStatus()
@@ -434,7 +441,9 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
         setRequestingSetup(true)
         setError('')
         try {
-          const response = await fetch(API + '?setup=install', { method: 'POST', headers: HEADERS })
+          const response = await fetch(API + '?setup=install', {
+            method: 'POST', headers: HEADERS, signal: AbortSignal.timeout(8000),
+          })
           const data = await response.json()
           if (!response.ok) throw new Error(data.error)
           setReady(data)
@@ -631,7 +640,10 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
             ready && !ready.engine && h('div', { 'aria-busy': installing || requestingSetup },
               installing
                 ? h(React.Fragment, null,
-                  h('p', { className: 'dsh-pdf-hint', role: 'status' }, setupStages[ready.setup.stage]),
+                  h('p', { className: 'dsh-pdf-hint', role: 'status' }, setupStages[ready.setup.stage],
+                    ready.setup.source && ' 当前来源：' + ready.setup.source),
+                  setupDisconnected && h('p', { className: 'dsh-pdf-hint', role: 'status' }, '暂时无法读取安装状态，正在重连。'),
+                  ready.setup.previousIssue && h('p', { className: 'dsh-pdf-hint' }, ready.setup.previousIssue + '，正在尝试其他来源。'),
                   h('div', { className: 'dsh-pdf-activity' }, h('progress', { 'aria-label': '排版引擎安装进度' })))
                 : h(React.Fragment, null,
                   ready.setup?.error && h('p', { className: 'dsh-pdf-error', role: 'alert' }, ready.setup.error),

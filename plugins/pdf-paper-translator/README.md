@@ -44,7 +44,9 @@ dsh plugin --profile desktop add dsh-pdf-paper-translator
 
 ### 排版引擎
 
-打开「PDF 文献翻译」。如果面板检测到缺少排版引擎，点击「安装排版引擎」即可开始安装。插件优先使用已有的 64 位 Python 3.12 或 3.13，否则从 NuGet 下载官方 Python 运行时。PDFMathTranslate-next 2.10.2 通过 PyPI 安装到当前用户的独立环境。安装失败时可在面板重试，完成后即可翻译已加入队列的 PDF。
+打开「PDF 文献翻译」。如果面板检测到缺少排版引擎，点击「安装排版引擎」即可开始安装。插件优先使用已有的 64 位 Python 3.12 或 3.13。缺少兼容版本时，优先从华为云 NuGet 镜像下载官方 Python 运行时，无法获取有效文件时改用 NuGet 官方源。两种来源都校验 SHA-256。PDFMathTranslate-next 2.10.2 安装到当前用户的独立环境。
+
+下载依赖先尝试清华 PyPI 镜像，再尝试 PyPI 官方源。单个源的下载最长 6 分钟，连续 90 秒无下载输出时也会切换来源。下载结束后在本机写入依赖。面板会显示当前来源、安装阶段和失败原因。安装失败时可重试，完成后即可翻译已加入队列的 PDF。
 
 也可以在 PowerShell 手动运行包内安装脚本。
 
@@ -58,4 +60,4 @@ $installer = Join-Path $dshHome 'profiles\desktop\node_modules\dsh-pdf-paper-tra
 
 ## 许可与依赖
 
-插件源码采用 [AGPL-3.0](../../LICENSE)。排版依赖为 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/blob/v2.10.2/LICENSE) 和 [BabelDOC](https://github.com/funstory-ai/BabelDOC/blob/v0.7.1/LICENSE)，它们由用户单独安装。
+插件源码采用 [AGPL-3.0](../../LICENSE)。排版依赖为 [PDFMathTranslate-next](https://pypi.org/project/pdf2zh-next/2.10.2/) 和 [BabelDOC](https://github.com/funstory-ai/BabelDOC/blob/v0.7.1/LICENSE)，它们由用户单独安装。
