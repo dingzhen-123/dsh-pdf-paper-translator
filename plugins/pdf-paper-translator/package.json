@@ -7,7 +7,7 @@
   "description": "Translate research papers and save PDF files from the DeepSeek Harness desktop sidebar.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dingzhen-123/deepseek-harness-plugins.git",
+    "url": "https://github.com/dingzhen-123/dsh-pdf-paper-translator.git",
     "directory": "plugins/pdf-paper-translator"
   },
   "exports": {

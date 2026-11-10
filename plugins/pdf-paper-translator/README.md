@@ -16,13 +16,13 @@
 
 ### 图形界面
 
-在「插件 → 添加插件」的输入框粘贴这一整行，再点击「安装」。
+在「插件 → 添加插件」的输入框粘贴仓库地址，再点击「安装」。
 
 ~~~text
-github:dingzhen-123/deepseek-harness-plugins#path:/plugins/pdf-paper-translator
+https://github.com/dingzhen-123/dsh-pdf-paper-translator
 ~~~
 
-GitHub 仓库下的 `plugins/pdf-paper-translator` 才是插件包，地址中的 `#path:` 必须保留。安装完成后可在「已安装」里启用插件。如果装过开发版 `@local/dsh-pdf-translate`，请先从同一配置卸载开发版，两个版本使用同一个面板入口。
+仓库地址默认安装 PDF Paper Translator。安装完成后可在「已安装」里启用插件。如果装过开发版 `@local/dsh-pdf-translate`，请先从同一配置卸载开发版，两个版本使用同一个面板入口。
 
 ### 命令行
 
@@ -31,16 +31,18 @@ GitHub 仓库下的 `plugins/pdf-paper-translator` 才是插件包，地址中�
 先完全退出 Harness。如果已经装好下文的排版引擎，可直接从 GitHub 安装插件。
 
 ~~~powershell
-dsh plugin --profile desktop add 'github:dingzhen-123/deepseek-harness-plugins#path:/plugins/pdf-paper-translator'
+dsh plugin --profile desktop add 'https://github.com/dingzhen-123/dsh-pdf-paper-translator'
 ~~~
+
+也可以用 `github:dingzhen-123/dsh-pdf-paper-translator#path:/plugins/pdf-paper-translator` 明确选择插件子目录。两个地址安装同一个包。
 
 ### 排版引擎
 
 如果还没有排版引擎，请准备 Git 和 Python 3.12 或 3.13，再在 PowerShell 运行下列命令。`setup-engine.ps1` 从 PyPI 将 PDFMathTranslate-next 2.10.2 安装到用户本地的独立 Python 环境。
 
 ~~~powershell
-git clone https://github.com/dingzhen-123/deepseek-harness-plugins.git
-Set-Location .\deepseek-harness-plugins\plugins\pdf-paper-translator
+git clone https://github.com/dingzhen-123/dsh-pdf-paper-translator.git
+Set-Location .\dsh-pdf-paper-translator\plugins\pdf-paper-translator
 .\setup-engine.ps1
 ~~~
 
