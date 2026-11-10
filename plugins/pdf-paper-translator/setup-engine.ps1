@@ -10,6 +10,7 @@ $upstreamHash = '7AC1811B0F82078A86BCCE88E185EFFF75FC55A3752C7F9C015186E5214B3C0
 $upstreamUrl = 'https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/releases/download/v2.10.2/pdf2zh-v2.10.2-BabelDOC-v0.7.1-with-assets-win64.zip'
 $lockPath = Join-Path $root 'portable-setup.lock'
 $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+$tar = Join-Path $env:SystemRoot 'System32\tar.exe'
 $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
 
 function Remove-SetupScratch([string]$Directory) {
@@ -80,14 +81,25 @@ function Test-BundledEngine([string]$Directory) {
         (Test-Path -LiteralPath (Join-Path $Directory 'assets\models\doclayout_yolo_docstructbench_imgsz1024.onnx') -PathType Leaf)
 }
 
+function Expand-EngineArchive([string]$Archive, [string]$Destination) {
+    if (Test-Path -LiteralPath $tar -PathType Leaf) {
+        # The Windows tar tool handles nested paths that PowerShell 5.1's ZIP API can reject.
+        [IO.Directory]::CreateDirectory($Destination) | Out-Null
+        & $tar -xf $Archive -C $Destination
+        if ($LASTEXITCODE -ne 0) { throw 'Could not extract the engine archive.' }
+    } else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
+    }
+}
+
 function Install-BundledEngine {
     if (Test-BundledEngine $bundleDir) { return }
     Write-Output 'DSH_PDF_SETUP bundled'
     Assert-SetupDirectory $bundleDir
     $scratch = Join-Path $root ('bundle-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $scratch)
+        Expand-EngineArchive $archivePath $scratch
         if (!(Test-BundledEngine $scratch)) { throw 'The bundled engine is incomplete.' }
         Write-Output 'DSH_PDF_SETUP verify'
         $python = Join-Path $scratch 'python\python.exe'
@@ -97,6 +109,21 @@ function Install-BundledEngine {
         [IO.Directory]::Move($scratch, $bundleDir)
     } finally {
         Remove-SetupScratch $scratch
+    }
+}
+
+function Get-SystemProxyOptions([uri]$Destination) {
+    if ($env:HTTPS_PROXY -or $env:ALL_PROXY) { return }
+    try {
+        $settings = [Net.WebRequest]::GetSystemWebProxy()
+        if (!$settings.IsBypassed($Destination)) {
+            $proxy = $settings.GetProxy($Destination)
+            if ($proxy.Scheme -in @('http', 'https') -and !$proxy.UserInfo) {
+                return @('--proxy', $proxy.AbsoluteUri)
+            }
+        }
+    } catch {
+        # Use curl's normal network route if system settings cannot be read.
     }
 }
 
@@ -119,6 +146,7 @@ function Get-UpstreamArchive {
         $options = @('--fail', '--location', '--silent', '--show-error', '--proto', '=https', '--proto-redir', '=https',
             '--connect-timeout', '12', '--max-time', '900', '--speed-limit', '1024', '--speed-time', '75',
             '--max-filesize', [string]$upstreamBytes, '--output', $upstreamZip)
+        $options += @(Get-SystemProxyOptions $upstreamUrl)
         $resume = if ($length -gt 0) { @('--continue-at', '-') } else { @() }
         & $curl @options @resume $upstreamUrl
         $downloadExitCode = $LASTEXITCODE
@@ -148,8 +176,7 @@ function Install-UpstreamEngine {
     Write-Output 'DSH_PDF_SETUP unpack'
     $scratch = Join-Path $root ('up-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::ExtractToDirectory($upstreamZip, $scratch)
+        Expand-EngineArchive $upstreamZip $scratch
         $distribution = $scratch
         if (!(Test-Path -LiteralPath (Join-Path $distribution 'runtime') -PathType Container)) {
             $directories = @(Get-ChildItem -LiteralPath $scratch -Directory)
@@ -173,7 +200,7 @@ function Install-UpstreamEngine {
             $modulePaths = @(Get-Content -LiteralPath $embeddedPath) + 'site-packages'
             Set-Content -LiteralPath $embeddedPath -Value $modulePaths -Encoding ASCII
         }
-        [IO.Compression.ZipFile]::ExtractToDirectory($assetsZip[0].FullName, (Join-Path $prepared 'assets'))
+        Expand-EngineArchive $assetsZip[0].FullName (Join-Path $prepared 'assets')
         if (!(Test-BundledEngine $prepared)) { throw 'The extracted offline assets are incomplete.' }
 
         Write-Output 'DSH_PDF_SETUP verify'

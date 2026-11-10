@@ -16,16 +16,16 @@
 
 ### 图形界面
 
-在「插件 → 添加插件」选择 npm 官方源，输入预览版包名并点击「安装」。
+在「插件 → 添加插件」输入包名并点击「安装」。
 
 ~~~text
-dsh-pdf-paper-translator@next
+dsh-pdf-paper-translator
 ~~~
 
-也可以粘贴带预览版标签的 GitHub 仓库地址。
+也可以粘贴 GitHub 仓库地址。
 
 ~~~text
-https://github.com/dingzhen-123/dsh-pdf-paper-translator#v0.1.5-beta.1
+https://github.com/dingzhen-123/dsh-pdf-paper-translator
 ~~~
 
 安装完成后可在「已安装」里启用插件。如果当前配置装有旧包 `@dingzhen-123/dsh-pdf-paper-translator` 或开发版 `@local/dsh-pdf-translate`，请先卸载旧包，再安装新版。
@@ -37,17 +37,17 @@ https://github.com/dingzhen-123/dsh-pdf-paper-translator#v0.1.5-beta.1
 先完全退出 Harness，再运行以下命令。
 
 ~~~powershell
-dsh plugin --profile desktop add dsh-pdf-paper-translator@next
+dsh plugin --profile desktop add dsh-pdf-paper-translator
 ~~~
 
 若要通过 GitHub 安装，把命令中的包名换成上面的完整仓库地址。
 
 ### 排版引擎
 
-在 Windows x64 上，预览版会复用已有的插件排版环境。首次需要准备引擎时，选好 PDF 并点击「准备并开始翻译」。插件从 PDFMathTranslate-next 的 GitHub Release 下载约 607 MB 的 Windows 完整包，校验 SHA-256 后在当前用户目录解包，随后翻译已选文献。重新点击可继续中断的下载。 [上游完整包](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/releases/expanded_assets/v2.10.2)
+在 Windows x64 上，插件会复用已有的排版环境。首次需要准备引擎时，选好 PDF 并点击「准备并开始翻译」。插件从 PDFMathTranslate-next 的 GitHub Release 下载约 607 MB 的 Windows 完整包，校验 SHA-256 后在当前用户目录解包，随后翻译已选文献。下载会采用本机的 HTTPS 代理配置，重试可以继续中断的下载。 [上游完整包](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/releases/expanded_assets/v2.10.2)
 
 全新环境需要能够访问 GitHub Release。排版包含 PDFMathTranslate-next 2.10.2、BabelDOC 0.7.1、便携 Python、字体和模型。已有兼容的 `pdf2zh_next` 时，可以在启动 Harness 前用 `DSH_PDF2ZH_PATH` 指定可执行文件的绝对路径。
 
 ## 许可与依赖
 
-插件源码采用 AGPL-3.0。Windows 预览版从上游取得其官方发行包，插件安装包只包含自身源码及文档。旧版独立测试包的组件清单见分发审计。[项目许可](../../LICENSE) · [分发审计](../../docs/distribution-audit.md)
+插件源码采用 AGPL-3.0。Windows 版从上游取得其官方发行包，插件安装包只包含自身源码及文档。旧版独立测试包的组件清单见分发审计。[项目许可](../../LICENSE) · [分发审计](../../docs/distribution-audit.md)

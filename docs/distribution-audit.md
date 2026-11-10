@@ -26,6 +26,6 @@
 
 GitHub Release 与 npm 公开包采用同一份轻量插件，排版组件由用户端从上游下载。公开包的文件清单已排除运行时压缩档。构建脚本仅在生成独立 Windows x64 本地测试包时加入该档。完整包的公开分发仍需处理上表所列事项。
 
-## 0.1.5-beta.1 的排版包来源
+## 0.1.5 的排版包来源
 
-此预览版在本机已有可用引擎时直接复用。Windows x64 的全新安装从 PDFMathTranslate-next 的 GitHub Release 下载其官方完整包，并按上游发布的 SHA-256 `7ac1811b0f82078a86bcce88e185efff75fc55a3752c7f9c015186e5214b3c0b` 校验。完整包由上游提供。项目在 npm 和 GitHub Release 分发的预览安装包只包含插件源码和文档。 [官方发行文件](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/releases/expanded_assets/v2.10.2)
+本机已有可用引擎时直接复用。Windows x64 首次准备引擎时从 PDFMathTranslate-next 的 GitHub Release 下载其官方完整包，并按上游发布的 SHA-256 `7ac1811b0f82078a86bcce88e185efff75fc55a3752c7f9c015186e5214b3c0b` 校验。完整包由上游提供。项目在 npm 和 GitHub Release 分发的安装包只包含插件源码和文档。 [官方发行文件](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/releases/expanded_assets/v2.10.2)
