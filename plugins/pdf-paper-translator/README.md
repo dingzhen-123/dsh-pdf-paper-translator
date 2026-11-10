@@ -14,6 +14,18 @@
 
 ## Windows 安装
 
+### 图形界面
+
+在「插件 → 添加插件」的输入框粘贴这一整行，再点击「安装」。
+
+~~~text
+github:dingzhen-123/deepseek-harness-plugins#path:/plugins/pdf-paper-translator
+~~~
+
+GitHub 仓库下的 `plugins/pdf-paper-translator` 才是插件包，地址中的 `#path:` 必须保留。安装完成后可在「已安装」里启用插件。如果装过开发版 `@local/dsh-pdf-translate`，请先从同一配置卸载开发版，两个版本使用同一个面板入口。
+
+### 命令行
+
 安装示例使用 DeepSeek Harness Desktop 的 `desktop` 配置，安装命令已用 0.2.1-rc.5 随附的 CLI 验证。若 `dsh` 未加入 PATH，使用 Harness 安装目录下的 `resources\runtime\cli\bin\dsh.cmd` 完整路径。
 
 先完全退出 Harness。如果已经装好下文的排版引擎，可直接从 GitHub 安装插件。
@@ -22,17 +34,17 @@
 dsh plugin --profile desktop add 'github:dingzhen-123/deepseek-harness-plugins#path:/plugins/pdf-paper-translator'
 ~~~
 
+### 排版引擎
+
 如果还没有排版引擎，请准备 Git 和 Python 3.12 或 3.13，再在 PowerShell 运行下列命令。`setup-engine.ps1` 从 PyPI 将 PDFMathTranslate-next 2.10.2 安装到用户本地的独立 Python 环境。
 
 ~~~powershell
 git clone https://github.com/dingzhen-123/deepseek-harness-plugins.git
 Set-Location .\deepseek-harness-plugins\plugins\pdf-paper-translator
 .\setup-engine.ps1
-$package = (Get-Location).Path.Replace('\', '/')
-dsh plugin --profile desktop add "link:$package"
 ~~~
 
-重新打开 Harness，从左侧进入「PDF 文献翻译」。如果装过开发版 `@local/dsh-pdf-translate`，请先从同一配置卸载开发版，两个版本使用同一个面板入口。
+安装好引擎后重新打开 Harness，从左侧进入「PDF 文献翻译」。
 
 默认引擎环境在 `%LOCALAPPDATA%\DshPdfTranslate\engine-2.10.2`。已有兼容的 `pdf2zh_next` 时，可以在启动 Harness 前用 `DSH_PDF2ZH_PATH` 指定可执行文件的绝对路径。
 
