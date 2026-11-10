@@ -44,7 +44,17 @@ dsh plugin --profile desktop add dsh-pdf-paper-translator
 
 ### 排版引擎
 
-打开「PDF 文献翻译」。如果面板检测到缺少排版引擎，点击「安装排版引擎」即可开始安装。插件优先使用已有的 64 位 Python 3.12 或 3.13。缺少兼容版本时，优先从华为云 NuGet 镜像下载官方 Python 运行时，无法获取有效文件时改用 NuGet 官方源。两种来源都校验 SHA-256。PDFMathTranslate-next 2.10.2 安装到当前用户的独立环境。
+如果拿到 Windows x64 完整包（文件名以 `-windows-x64.tgz` 结尾），可先完全退出 Harness，再在 PowerShell 用本地路径安装。
+
+~~~powershell
+dsh plugin --profile desktop add 'C:\下载\dsh-pdf-paper-translator-0.1.3-windows-x64.tgz'
+~~~
+
+完整包包含便携 Python、排版引擎、字体和版面模型。第一次选好 PDF 并点击「准备并开始翻译」时，插件自动解包并接着翻译。翻译仍使用 Harness 中选定的模型。
+
+普通版按以下方式自动准备排版环境。
+
+打开「PDF 文献翻译」，选好 PDF 后点击「准备并开始翻译」。插件在当前用户目录安装 PDFMathTranslate-next 2.10.2，环境就绪后自动翻译队列中的 PDF。用户无需提前安装 Python。插件可使用本机兼容的 64 位 Python 3.12 或 3.13，也会在需要时下载便携运行时。运行时优先从华为云 NuGet 镜像下载，无法获取有效文件时改用 NuGet 官方源。两种来源都校验 SHA-256。
 
 下载依赖先尝试清华 PyPI 镜像，再尝试 PyPI 官方源。单个源的下载最长 6 分钟，连续 90 秒无下载输出时也会切换来源。下载结束后在本机写入依赖。面板会显示当前来源、安装阶段和失败原因。安装失败时可重试，完成后即可翻译已加入队列的 PDF。
 

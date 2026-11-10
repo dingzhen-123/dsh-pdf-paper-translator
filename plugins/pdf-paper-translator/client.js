@@ -10,6 +10,8 @@ window.__ModuleLoader__.load({
     const setupStages = {
       check: '正在检查安装环境…',
       python: '正在准备 Python 运行环境…',
+      bundled: '正在解包插件自带的排版组件…',
+      environment: '正在创建排版引擎的运行环境…',
       connect: '正在连接下载源…',
       packages: '正在解析和下载排版引擎依赖…',
       writing: '正在写入排版引擎依赖…',
@@ -196,6 +198,38 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
     const fileDrag = event => event.dataTransfer.types.includes('Files')
     const maxPdfBytes = 60 * 1024 * 1024
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+    async function watchEngine(signal, update, install = false) {
+      async function request(start = false) {
+        const response = await fetch(API + (start ? '?setup=install' : ''), {
+          method: start ? 'POST' : 'GET',
+          headers: HEADERS,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+        })
+        const status = await response.json()
+        if (!response.ok) throw new Error(status.error || '无法读取排版引擎状态。')
+        signal.throwIfAborted()
+        return status
+      }
+
+      let status = await request(install)
+      update(status)
+      let failures = 0
+      while (status.setup?.state === 'installing') {
+        await wait(failures ? 2500 : 1200)
+        signal.throwIfAborted()
+        try {
+          status = await request()
+          failures = 0
+          update(status)
+        } catch {
+          signal.throwIfAborted()
+          if (++failures === 3) throw new Error('暂时无法读取安装状态。可以重试，已有安装会继续。')
+          update(null)
+        }
+      }
+      return status
+    }
     const fileSize = size => size < 1024 ? size + ' B' : size < 1024 * 1024
       ? Math.round(size / 1024) + ' KB' : (size / (1024 * 1024)).toFixed(1) + ' MB'
 
@@ -384,7 +418,6 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
       const [busy, setBusy] = useState(false)
       const [over, setOver] = useState(false)
       const [ready, setReady] = useState(null)
-      const [requestingSetup, setRequestingSetup] = useState(false)
       const [setupDisconnected, setSetupDisconnected] = useState(false)
       const [modelChoice, setModelChoice] = useState('')
       const [folderChoice, setFolderChoice] = useState(() => {
@@ -407,52 +440,21 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
       const folder = folderChoice.trim() || ready?.outputFolder || ''
       const installing = ready?.setup?.state === 'installing'
 
+      function updateEngine(status) {
+        setSetupDisconnected(!status)
+        if (status) setReady(status)
+      }
+
       useEffect(() => {
+        if (busy) return
         const request = new AbortController()
-        let timer
-        async function loadStatus() {
-          try {
-            const signal = AbortSignal.any([request.signal, AbortSignal.timeout(8000)])
-            const response = await fetch(API, { headers: HEADERS, signal })
-            if (!response.ok) throw new Error()
-            const data = await response.json()
-            request.signal.throwIfAborted()
-            setSetupDisconnected(false)
-            setReady(data)
-            if (data.setup?.state === 'installing') timer = setTimeout(loadStatus, 1200)
-          } catch {
-            if (request.signal.aborted) return
-            if (installing) {
-              setSetupDisconnected(true)
-              timer = setTimeout(loadStatus, 2500)
-            } else setError('暂时无法连接本机翻译服务。')
-          }
-        }
-        void loadStatus()
-        return () => {
-          request.abort()
-          clearTimeout(timer)
-        }
-      }, [installing])
+        void watchEngine(request.signal, updateEngine).catch(() => {
+          if (!request.signal.aborted) setError('暂时无法连接本机翻译服务。')
+        })
+        return () => request.abort()
+      }, [busy])
 
       useEffect(() => () => task.current?.abort(), [])
-
-      async function setupEngine() {
-        setRequestingSetup(true)
-        setError('')
-        try {
-          const response = await fetch(API + '?setup=install', {
-            method: 'POST', headers: HEADERS, signal: AbortSignal.timeout(8000),
-          })
-          const data = await response.json()
-          if (!response.ok) throw new Error(data.error)
-          setReady(data)
-        } catch (cause) {
-          setError(cause.message || '无法启动排版引擎安装，请重试。')
-        } finally {
-          setRequestingSetup(false)
-        }
-      }
 
       function updateQueue(next) {
         pending.current = next
@@ -530,7 +532,8 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
 
       async function start(event) {
         event.preventDefault()
-        if (task.current || !pending.current.length || !selection || !ready?.engine || !folder || folderBusy) return
+        if (task.current || !pending.current.length || !selection ||
+            !(ready?.engine || ready?.autoInstall) || !folder || folderBusy) return
         setError('')
         const controller = new AbortController()
         const { signal } = controller
@@ -538,6 +541,13 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
         task.current = controller
         setBusy(true)
         try {
+          if (!ready.engine) {
+            const status = await watchEngine(signal, updateEngine, true)
+            if (!status.engine) {
+              if (!status.setup?.error) setError('排版引擎尚未就绪，请重试。')
+              return
+            }
+          }
           while (!signal.aborted && pending.current.length) {
             const [entry, ...remaining] = pending.current
             const name = entry.file.name
@@ -552,6 +562,8 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
               setResults(previous => [...previous, { id: entry.id, name, message, cancelled: signal.aborted }])
             }
           }
+        } catch (cause) {
+          if (!signal.aborted) setError(cause.message || '无法准备排版引擎，请重试。')
         } finally {
           task.current = null
           setBusy(false)
@@ -637,29 +649,29 @@ button.dsh-pdf-control svg { flex: 0 0 auto; color: var(--muted); }
                     button('更改…', chooseFolder, { disabled: folderBusy }),
                     button('打开文件夹', () => openPath(folder, '无法打开输出文件夹，请检查路径。'), { disabled: !folder }))))),
             h('p', { className: 'dsh-pdf-hint' }, '本批文献使用相同设置，模型会自动判断原文语言。'),
-            ready && !ready.engine && h('div', { 'aria-busy': installing || requestingSetup },
+            ready && !ready.engine && h('div', { 'aria-busy': installing },
               installing
                 ? h(React.Fragment, null,
                   h('p', { className: 'dsh-pdf-hint', role: 'status' }, setupStages[ready.setup.stage],
                     ready.setup.source && ' 当前来源：' + ready.setup.source),
                   setupDisconnected && h('p', { className: 'dsh-pdf-hint', role: 'status' }, '暂时无法读取安装状态，正在重连。'),
-                  ready.setup.previousIssue && h('p', { className: 'dsh-pdf-hint' }, ready.setup.previousIssue + '，正在尝试其他来源。'),
+                  ready.setup.previousIssue && h('p', { className: 'dsh-pdf-hint' }, '上一次尝试：' + ready.setup.previousIssue),
                   h('div', { className: 'dsh-pdf-activity' }, h('progress', { 'aria-label': '排版引擎安装进度' })))
                 : h(React.Fragment, null,
                   ready.setup?.error && h('p', { className: 'dsh-pdf-error', role: 'alert' }, ready.setup.error),
                   h('p', { className: 'dsh-pdf-hint' }, ready.autoInstall
-                    ? '首次翻译需要排版引擎。点击安装会下载依赖，并安装到当前用户目录。'
-                    : '找不到排版引擎。请安装 pdf2zh_next 或检查 DSH_PDF2ZH_PATH 配置。'),
-                  ready.autoInstall && button(ready.setup?.error ? '重试安装' : '安装排版引擎', setupEngine,
-                    { disabled: requestingSetup }))),
-            ready?.engine && ready.setup?.state === 'ready' &&
-              h('p', { className: 'dsh-pdf-hint', role: 'status' }, '排版引擎已就绪，可以开始翻译。'),
+                    ? (ready.bundledEngine
+                      ? '首次使用会自动解包插件内的排版组件，准备完成后接着翻译。'
+                      : '首次使用会自动下载排版组件，准备完成后接着翻译。')
+                    : '找不到排版引擎。请安装 pdf2zh_next 或检查 DSH_PDF2ZH_PATH 配置。'))),
             h('div', { className: 'dsh-pdf-actions' },
               h('button', {
                 type: 'submit', className: 'dsh-pdf-button dsh-pdf-primary',
-                disabled: busy || !queue.length || !ready?.engine || !selection || !folder || folderBusy,
-              }, busy ? '正在翻译…' : '开始翻译'),
-              busy && button('停止队列', () => task.current?.abort())),
+                disabled: busy || !queue.length || !(ready?.engine || ready?.autoInstall) || !selection || !folder || folderBusy,
+              }, ready?.engine
+                ? (busy ? '正在翻译…' : '开始翻译')
+                : (busy ? '正在准备排版引擎…' : '准备并开始翻译')),
+              busy && button(ready?.engine ? '停止队列' : '取消等待', () => task.current?.abort())),
             h(Activity, { job, name: currentName }),
             error && h('p', { className: 'dsh-pdf-error', role: 'alert' }, error),
             h('section', { className: 'dsh-pdf-result', hidden: !results.length, 'aria-labelledby': 'dsh-pdf-results-title' },

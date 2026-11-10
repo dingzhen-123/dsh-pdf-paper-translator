@@ -4,7 +4,7 @@ import { pipeline } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { canInstallEngine, engineAvailable, installEngine, json, readBytes, translatePdf } from './engine.js'
+import { canInstallEngine, engineAvailable, hasBundledEngine, installEngine, json, readBytes, translatePdf } from './engine.js'
 
 export const inject = ['webServer', 'agentDefaultModel', 'llm']
 const API = '/pdf-translate/api'
@@ -80,7 +80,7 @@ export function apply(ctx) {
     async function status() {
       return {
         engine: setup?.state !== 'installing' && await engineAvailable(),
-        autoInstall: canInstallEngine(), setup, outputFolder: DEFAULT_FOLDER,
+        autoInstall: canInstallEngine(), bundledEngine: hasBundledEngine(), setup, outputFolder: DEFAULT_FOLDER,
       }
     }
     const unregister = ctx.webServer.register({

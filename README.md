@@ -20,6 +20,8 @@ https://github.com/dingzhen-123/dsh-pdf-paper-translator
 
 ## 首次使用
 
-在 Windows Harness 的侧栏打开「PDF 文献翻译」。如果缺少排版引擎，点击「安装排版引擎」。插件会在当前用户目录下载并安装引擎，缺少兼容 Python 时会准备独立运行时。安装完成后可直接开始翻译。引擎首次使用时会下载版面模型和字体。详见[插件使用说明](plugins/pdf-paper-translator/README.md)。
+在 Windows Harness 的侧栏打开「PDF 文献翻译」，选好 PDF 后点击「准备并开始翻译」。环境就绪后会自动翻译已选的 PDF。
 
-仓库采用 [AGPL-3.0](LICENSE)。插件所用的排版引擎单独安装。
+Windows x64 完整包自带便携 Python、排版引擎和版面资源，首次使用时自动解包。普通版首次使用时自动下载排版组件、版面模型和字体。两种版本都使用 Harness 中选定的翻译模型。详见[插件使用说明](plugins/pdf-paper-translator/README.md)。
+
+仓库采用 [AGPL-3.0](LICENSE)。

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { access, open, readdir, writeFile } from 'node:fs/promises'
@@ -11,16 +11,24 @@ import os from 'node:os'
 
 const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
 const engineDir = path.join(local, 'DshPdfTranslate', 'engine-2.10.2')
+const runtimeDir = path.join(local, 'DshPdfTranslate', 'bundle-0.1.3')
+const bundledPython = path.join(runtimeDir, 'python', 'python.exe')
+const bundled = process.platform === 'win32' && process.arch === 'x64' &&
+  !process.env.DSH_PDF2ZH_PATH && existsSync(fileURLToPath(new URL('./runtime/win32-x64.zip', import.meta.url)))
 
 export function canInstallEngine() {
   return process.platform === 'win32' && !process.env.DSH_PDF2ZH_PATH
 }
 
+export function hasBundledEngine() {
+  return bundled
+}
+
 export function enginePath() {
-  return process.env.DSH_PDF2ZH_PATH ||
+  return process.env.DSH_PDF2ZH_PATH || (bundled ? bundledPython :
     (process.platform === 'win32'
       ? path.join(engineDir, 'Scripts', 'pdf2zh_next.exe')
-      : 'pdf2zh_next')
+      : 'pdf2zh_next'))
 }
 
 function accessible(file, mode) {
@@ -29,6 +37,8 @@ function accessible(file, mode) {
 
 export async function engineAvailable() {
   const command = enginePath()
+  if (bundled) return await accessible(bundledPython) &&
+    accessible(path.join(runtimeDir, 'assets', 'models', 'doclayout_yolo_docstructbench_imgsz1024.onnx'))
   if (canInstallEngine()) {
     return !await accessible(engineDir + '.installing') &&
       await accessible(command) && await accessible(path.join(engineDir, 'Scripts', 'python.exe'))
@@ -43,18 +53,24 @@ export async function engineAvailable() {
 export async function installEngine(onStage) {
   const errors = {
     check: '无法准备安装目录。请检查当前用户目录的写入权限和可用空间。',
-    python: '无法准备 Python 运行环境。请检查网络后重试，也可以先安装 Python 3.12 或 3.13。',
+    python: '无法准备便携运行时。请检查网络和可用空间后重试。',
+    bundled: '无法解包插件自带的排版组件。请检查当前用户目录的写入权限和可用空间后重试。',
+    environment: '无法创建排版环境。请检查当前用户目录的写入权限和可用空间后重试。',
     connect: '无法连接排版引擎下载源。请检查网络后重试。',
     packages: '下载或安装排版引擎失败。请检查网络和磁盘空间后重试。',
     writing: '写入排版引擎依赖失败。请检查磁盘空间和当前用户目录的写入权限后重试。',
     verify: '排版引擎安装后未能启动。请重试安装。',
     locked: '另一个窗口正在安装排版引擎。请稍后重试。',
   }
-  const sources = { tuna: '清华 PyPI 镜像', pypi: 'PyPI 官方源', huawei: '华为云 NuGet 镜像', nuget: 'NuGet 官方源' }
+  const sources = {
+    tuna: '清华 PyPI 镜像', pypi: 'PyPI 官方源', huawei: '华为云 NuGet 镜像', nuget: 'NuGet 官方源',
+    system: '本机 Python', portable: '便携运行时',
+  }
   const reasons = {
     unreachable: '连接失败', timeout: '安装超时', network: '下载连接中断',
     missing: '缺少匹配的依赖', disk: '磁盘空间不足', permission: '安装目录不可写',
-    checksum: '运行时校验失败', failed: '安装失败',
+    checksum: '运行时校验失败', extract: '运行时解包失败', launch: '运行时无法启动',
+    busy: '安装文件正被占用', failed: '安装失败',
   }
   const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const script = fileURLToPath(new URL('./setup-engine.ps1', import.meta.url))
@@ -68,20 +84,20 @@ export async function installEngine(onStage) {
   const issues = []
   const progress = createInterface({ input: child.stdout })
   progress.on('line', line => {
-    const match = /^DSH_PDF_SETUP (check|python|connect|packages|writing|verify|locked|issue)(?: (tuna|pypi|huawei|nuget))?(?: (\w+))?$/.exec(line)
+    const match = /^DSH_PDF_SETUP (check|python|bundled|environment|connect|packages|writing|verify|locked|issue)(?: (tuna|pypi|huawei|nuget|system|portable))?(?: (\w+))?$/.exec(line)
     if (!match) return
     const [, event, source, reason] = match
     if (event === 'issue') {
       if (sources[source] && reasons[reason]) issues.push(`${sources[source]}：${reasons[reason]}`)
     } else {
-      if (stage === 'python' && event !== 'python') issues.length = 0
+      if (['python', 'environment'].includes(stage) && event === 'connect') issues.length = 0
       stage = event
       onStage({ stage, source: sources[source], previousIssue: source ? issues.at(-1) : undefined })
     }
   })
   const [code] = await once(child, 'close').catch(() => { throw new Error('无法启动 Windows PowerShell。') })
   if (code !== 0 || !await engineAvailable()) {
-    const details = ['python', 'connect', 'packages', 'writing'].includes(stage) && issues.length
+    const details = ['python', 'environment', 'connect', 'packages', 'writing'].includes(stage) && issues.length
       ? issues.join('；') + '。' : ''
     throw new Error(details + errors[stage])
   }
@@ -196,14 +212,16 @@ async function openModelBridge(route, signal, results, onUpdate) {
 }
 
 async function runPdf2zh(args, directory, signal, onUpdate) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^PDF2ZH_/i.test(key)))
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^(PDF2ZH_|DSH_PDF_BUNDLED_ASSETS$)/i.test(key)))
   env.NO_PROXY = [env.NO_PROXY || env.no_proxy, '127.0.0.1', 'localhost'].filter(Boolean).join(',')
   env.no_proxy = env.NO_PROXY
   env.PYTHONUTF8 = '1'
-  const managed = canInstallEngine()
-  const executable = managed ? path.join(path.dirname(enginePath()), 'python.exe') : enginePath()
+  const managed = bundled || canInstallEngine()
+  const executable = bundled ? bundledPython : (managed ? path.join(engineDir, 'Scripts', 'python.exe') : enginePath())
   const runner = fileURLToPath(new URL('./pdf-progress.py', import.meta.url))
-  const commandArgs = managed ? ['-u', runner, ...args] : args
+  if (bundled) env.DSH_PDF_BUNDLED_ASSETS = path.join(runtimeDir, 'assets')
+  const commandArgs = managed ? ['-u', ...(bundled ? ['-I', '-B', '-X', 'utf8'] : []), runner, ...args] : args
   if (!managed) onUpdate({ stage: 'process' })
   const child = spawn(executable, commandArgs, {
     cwd: directory, env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],

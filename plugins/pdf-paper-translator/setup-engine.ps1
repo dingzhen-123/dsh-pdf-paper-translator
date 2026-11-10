@@ -6,6 +6,10 @@ $engineDir = Join-Path $root 'engine-2.10.2'
 $enginePython = Join-Path $engineDir 'Scripts\python.exe'
 $engine = Join-Path $engineDir 'Scripts\pdf2zh_next.exe'
 $marker = $engineDir + '.installing'
+$archivePath = Join-Path $PSScriptRoot 'runtime\win32-x64.zip'
+$bundleDir = Join-Path $root 'bundle-0.1.3'
+$hasBundle = Test-Path -LiteralPath $archivePath -PathType Leaf
+$lockPath = if ($hasBundle) { $bundleDir + '.lock' } else { $engineDir + '.lock' }
 $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
 
@@ -14,6 +18,16 @@ function Remove-SetupScratch([string]$Directory) {
     $target = (Resolve-Path -LiteralPath $Directory -ErrorAction SilentlyContinue).ProviderPath
     if ($target -and $target.StartsWith($parent, [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-SetupDirectory([string]$Directory) {
+    if (Test-Path -LiteralPath $Directory) {
+        $item = Get-Item -LiteralPath $Directory -Force
+        if (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $item.Parent.FullName -ne (Resolve-Path -LiteralPath $root).ProviderPath) {
+            throw 'The engine directory must be a regular directory inside the plugin data folder.'
+        }
     }
 }
 
@@ -33,8 +47,10 @@ function Get-ManagedPython {
     $version = '3.13.17'
     $runtime = Join-Path $root "python-$version-x64"
     $executable = Join-Path $runtime 'python.exe'
-    if (Test-Path -LiteralPath $executable) { return $executable }
+    $cached = Find-Python $executable
+    if ($cached) { return $cached }
 
+    Assert-SetupDirectory $runtime
     $scratch = Join-Path $root ('python-download-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $scratch | Out-Null
     try {
@@ -63,8 +79,24 @@ function Get-ManagedPython {
         if (!$verified) { throw 'Could not download and verify the Python runtime.' }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $unpacked = Join-Path $scratch 'unpacked'
-        [IO.Compression.ZipFile]::ExtractToDirectory($archive, $unpacked)
-        [IO.Directory]::Move((Join-Path $unpacked 'tools'), $runtime)
+        try {
+            [IO.Compression.ZipFile]::ExtractToDirectory($archive, $unpacked)
+        } catch {
+            [Console]::WriteLine("DSH_PDF_SETUP issue $source extract")
+            throw
+        }
+        $tools = Join-Path $unpacked 'tools'
+        if (!(Find-Python (Join-Path $tools 'python.exe'))) {
+            [Console]::WriteLine("DSH_PDF_SETUP issue $source launch")
+            throw 'The downloaded Python runtime could not start.'
+        }
+        Remove-SetupScratch $runtime
+        try {
+            [IO.Directory]::Move($tools, $runtime)
+        } catch {
+            [Console]::WriteLine("DSH_PDF_SETUP issue $source permission")
+            throw
+        }
         return $executable
     } finally {
         Remove-SetupScratch $scratch
@@ -72,8 +104,8 @@ function Get-ManagedPython {
 }
 
 function Invoke-SetupProcess([string]$Executable, [string[]]$Arguments, [int]$Limit, [int]$IdleLimit = 0) {
-    $stdout = Join-Path $root 'engine-setup.stdout'
-    $stderr = Join-Path $root 'engine-setup.stderr'
+    $stdout = $lockPath + '.stdout'
+    $stderr = $lockPath + '.stderr'
     $child = Start-Process -FilePath $Executable -ArgumentList $Arguments -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     try {
@@ -96,9 +128,10 @@ function Invoke-SetupProcess([string]$Executable, [string[]]$Arguments, [int]$Li
         }
         if ($child.ExitCode -eq 0) { return 'ok' }
 
-        $diagnostics = (Get-Content -LiteralPath $stderr -Tail 40) -join "`n"
+        $diagnostics = (Get-Content -LiteralPath $stderr, $stdout -Tail 40) -join "`n"
         switch -Regex ($diagnostics) {
             'WinError 112|Errno 28|No space left' { return 'disk' }
+            'WinError (32|33)\]|being used by another process' { return 'busy' }
             'WinError 5\]|Errno 13|Permission denied|Access is denied' { return 'permission' }
             'ReadTimeout|ConnectTimeout|timed out|ConnectionError|SSLError|ProxyError|Failed to establish a new connection' { return 'network' }
             'No matching distribution|Could not find a version that satisfies' { return 'missing' }
@@ -112,6 +145,40 @@ function Invoke-SetupProcess([string]$Executable, [string[]]$Arguments, [int]$Li
         }
         $child.Dispose()
         Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-EngineEnvironment([string]$Interpreter, [string]$Source) {
+    [Console]::WriteLine("DSH_PDF_SETUP environment $Source")
+    Assert-SetupDirectory $engineDir
+    $arguments = @('-I', '-m', 'venv', '--clear', ('"' + $engineDir + '"'))
+    $result = Invoke-SetupProcess $Interpreter $arguments 180
+    if ($result -ne 'ok') { [Console]::WriteLine("DSH_PDF_SETUP issue $Source $result") }
+    return $result
+}
+
+function Test-BundledEngine([string]$Directory) {
+    return (Test-Path -LiteralPath (Join-Path $Directory 'python\python.exe') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $Directory 'assets\models\doclayout_yolo_docstructbench_imgsz1024.onnx') -PathType Leaf)
+}
+
+function Install-BundledEngine {
+    if (Test-BundledEngine $bundleDir) { return }
+    Write-Output 'DSH_PDF_SETUP bundled'
+    Assert-SetupDirectory $bundleDir
+    $scratch = Join-Path $root ('bundle-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $scratch)
+        if (!(Test-BundledEngine $scratch)) { throw 'The bundled engine is incomplete.' }
+        Write-Output 'DSH_PDF_SETUP verify'
+        $python = Join-Path $scratch 'python\python.exe'
+        $probe = @('-I', '-B', '-c', '"import onnxruntime, pymupdf, pdf2zh_next"')
+        if ((Invoke-SetupProcess $python $probe 60) -ne 'ok') { throw 'The bundled engine could not start.' }
+        Remove-SetupScratch $bundleDir
+        [IO.Directory]::Move($scratch, $bundleDir)
+    } finally {
+        Remove-SetupScratch $scratch
     }
 }
 
@@ -158,13 +225,17 @@ function Install-EnginePackages {
 Write-Output 'DSH_PDF_SETUP check'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 try {
-    $lock = [IO.File]::Open(($engineDir + '.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+    $lock = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'None')
 } catch [IO.IOException] {
     Write-Output 'DSH_PDF_SETUP locked'
     throw
 }
 
 try {
+    if ($hasBundle) {
+        Install-BundledEngine
+        return
+    }
     $retry = Test-Path -LiteralPath $marker
     if (!$retry -and (Test-Path -LiteralPath $engine) -and
         (Test-Path -LiteralPath $enginePython)) { return }
@@ -180,9 +251,13 @@ try {
         if (!$basePython -and !$Python) { $basePython = Find-Python 'py.exe' @('-3.12') }
         if (!$basePython -and !$Python) { $basePython = Find-Python 'python.exe' }
         if (!$basePython -and $Python) { throw 'Use a 64-bit Python 3.12 or 3.13 executable.' }
-        if (!$basePython) { $basePython = Get-ManagedPython }
-        & $basePython -m venv --clear $engineDir
-        if ($LASTEXITCODE) { throw 'Could not create the engine virtual environment.' }
+        $result = if ($basePython) { New-EngineEnvironment $basePython 'system' } else { 'missing' }
+        if ($result -ne 'ok' -and !$Python -and $result -notin @('disk', 'busy')) {
+            Write-Output 'DSH_PDF_SETUP python'
+            $managedPython = Get-ManagedPython
+            $result = New-EngineEnvironment $managedPython 'portable'
+        }
+        if ($result -ne 'ok') { throw 'Could not create the engine virtual environment.' }
     }
 
     Install-EnginePackages
