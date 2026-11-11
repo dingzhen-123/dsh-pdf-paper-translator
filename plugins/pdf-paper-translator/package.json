@@ -1,6 +1,6 @@
 {
   "name": "dsh-pdf-paper-translator",
-  "version": "0.1.5",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -16,7 +16,7 @@
     "./icon": "./icon.svg",
     "./locale/*.json": "./locale/*.json"
   },
-  "files": ["index.js", "engine.js", "pdf-progress.py", "client.js", "icon.svg", "locale/*.json", "cordis.patch.yml", "setup-engine.ps1"],
+  "files": ["index.js", "engine.js", "engine-config.json", "pdf-progress.py", "client.js", "icon.svg", "locale/*.json", "cordis.patch.yml", "setup-engine.ps1"],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {

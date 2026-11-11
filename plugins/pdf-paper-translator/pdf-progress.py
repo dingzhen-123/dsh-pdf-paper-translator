@@ -5,9 +5,11 @@ import json
 import logging
 import multiprocessing
 import os
+import sys
+from importlib.metadata import version
 from pathlib import Path
 
-if assets_path := os.environ.get("DSH_PDF_BUNDLED_ASSETS"):
+if assets_path := os.environ.get("DSH_PDF_ASSETS"):
     from babeldoc import const
 
     assets = Path(assets_path)
@@ -15,24 +17,69 @@ if assets_path := os.environ.get("DSH_PDF_BUNDLED_ASSETS"):
 
     def bundled_cache_path(filename, sub_folder=None):
         if sub_folder in {"fonts", "models", "cmap", "tiktoken"}:
-            return assets / sub_folder / filename
+            directory = assets / sub_folder
+            directory.mkdir(parents=True, exist_ok=True)
+            return directory / filename
         return original_cache_path(filename, sub_folder)
 
     const.get_cache_file_path = bundled_cache_path
     const.TIKTOKEN_CACHE_FOLDER = assets / "tiktoken"
     os.environ["TIKTOKEN_CACHE_DIR"] = str(const.TIKTOKEN_CACHE_FOLDER)
 
-from babeldoc.assets.assets import warmup
-from pdf2zh_next.config import ConfigManager
-from pdf2zh_next.high_level import do_translate_async_stream
+
+def prepare_assets():
+    from babeldoc.assets import assets as upstream
+
+    if action := os.environ.get("DSH_PDF_RESTORE_ASSETS"):
+        upstream.restore_offline_assets_package(Path(action))
+    upstream.warmup()
+
+
+def engine_health():
+    from babeldoc.assets.assets import generate_all_assets_file_list, verify_file
+    from babeldoc.const import get_cache_file_path
+    import onnxruntime
+    import pymupdf
+    from pdf2zh_next.high_level import do_translate_async_stream
+
+    missing = any(
+        not verify_file(get_cache_file_path(entry["name"], group), entry["sha3_256"])
+        for group, entries in generate_all_assets_file_list().items()
+        for entry in entries
+    )
+    print(json.dumps({
+        "version": version("pdf2zh-next"),
+        "babeldoc": version("BabelDOC"),
+        "resources": not missing,
+    }))
+
+
+def check_fonts():
+    from babeldoc.assets.assets import generate_all_assets_file_list, verify_file
+    from babeldoc.const import get_cache_file_path
+
+    fonts = generate_all_assets_file_list()["fonts"]
+    directory = get_cache_file_path(fonts[0]["name"], "fonts").parent
+    known = {entry["name"]: entry["sha3_256"] for entry in fonts}
+    for font in directory.iterdir():
+        if font.suffix.lower() in {".ttf", ".otf", ".ttc", ".woff", ".woff2"} and font.name not in known:
+            raise ValueError(f"Unknown BabelDOC font: {font.name}")
+    for name, digest in sorted(known.items()):
+        if not verify_file(directory / name, digest):
+            raise ValueError(f"Missing or altered BabelDOC font: {name}")
+        license_name = "NAVER font license" if name.startswith("MaruBuri-") else "OFL-1.1"
+        print(f"{name} [{license_name}]")
 
 
 async def main():
+    from pdf2zh_next.config import ConfigManager
+    from pdf2zh_next.high_level import do_translate_async_stream
+
     logging.basicConfig(level=logging.WARNING)
     settings = ConfigManager().initialize_config()
     (document,) = settings.basic.input_files
     settings.basic.input_files = set()
-    warmup()
+    prepare_assets()
 
     async for event in do_translate_async_stream(settings, document):
         if event["type"] in {"progress_start", "progress_update", "progress_end"}:
@@ -50,5 +97,20 @@ async def main():
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
-    raise SystemExit(asyncio.run(main()))
+    match sys.argv[1:]:
+        case ["--dsh-warmup"]:
+            logging.basicConfig(level=logging.INFO)
+            prepare_assets()
+        case ["--dsh-health"]:
+            engine_health()
+        case ["--dsh-check-fonts"]:
+            check_fonts()
+        case ["--dsh-generate-assets", directory]:
+            from babeldoc.assets.assets import generate_offline_assets_package, get_offline_assets_tag
+
+            output = Path(directory)
+            generate_offline_assets_package(output)
+            print(output / f"offline_assets_{get_offline_assets_tag()}.zip")
+        case _:
+            multiprocessing.freeze_support()
+            raise SystemExit(asyncio.run(main()))

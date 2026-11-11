@@ -1,0 +1,9 @@
+PDF Paper Translator for DeepSeek Harness is distributed under AGPL-3.0-only.
+Its source is available at https://github.com/dingzhen-123/dsh-pdf-paper-translator.
+
+The plugin runs separately installed copies of PDFMathTranslate-next 2.10.2
+and BabelDOC 0.7.1. The installer retrieves the upstream distributions and
+does not replace their installed files. The plugin's Python wrapper directs
+BabelDOC to a local resource cache and uses its built-in upstream selection.
+
+See THIRD-PARTY.md for component sources and licenses.

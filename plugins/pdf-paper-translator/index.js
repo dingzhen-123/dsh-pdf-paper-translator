@@ -4,7 +4,7 @@ import { pipeline } from 'node:stream/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { canInstallEngine, engineAvailable, engineSetupProgress, hasBundledEngine, installEngine, json, readBytes, translatePdf } from './engine.js'
+import { canInstallEngine, engineConfig, engineDoctor, engineHealth, engineRoot, hasBundledEngine, installEngine, json, readBytes, translatePdf } from './engine.js'
 
 export const inject = ['webServer', 'agentDefaultModel', 'llm']
 const API = '/pdf-translate/api'
@@ -77,11 +77,23 @@ export function apply(ctx) {
     let active
     let latestJob
     let setup
-    async function status() {
+    let diagnosis
+    function startSetup() {
+      if (setup?.state === 'installing') return
+      setup = { state: 'installing', stage: 'check' }
+      void installEngine(update => { Object.assign(setup, update) }).then(
+        () => { setup = { state: 'ready', upstreams: setup.upstreams } },
+        error => { setup = { state: 'error', stage: setup.stage, upstreams: setup.upstreams, error: error.message } },
+      )
+    }
+
+    async function status(refresh = false) {
+      const { engine: _, ...health } = setup?.state === 'installing' ? {} : await engineHealth(refresh)
+      const bundledEngine = hasBundledEngine()
+      if (bundledEngine && !setup && !health.ok) startSetup()
       return {
-        engine: setup?.state !== 'installing' && await engineAvailable(),
-        autoInstall: canInstallEngine(), bundledEngine: hasBundledEngine(), setup, outputFolder: DEFAULT_FOLDER,
-        download: setup?.stage === 'download' ? await engineSetupProgress() : undefined,
+        engine: health.ok === true, health, autoInstall: canInstallEngine(), bundledEngine, setup, outputFolder: DEFAULT_FOLDER,
+        engineLocation: engineRoot, engineVersion: engineConfig.pdf2zh, babeldocVersion: engineConfig.babeldoc,
       }
     }
     const unregister = ctx.webServer.register({
@@ -99,23 +111,33 @@ export function apply(ctx) {
           if (jobId) {
             if (latestJob?.id === jobId) json(res, 200, latestJob)
             else json(res, 404, { error: '找不到该翻译任务。' })
+          } else if (url.searchParams.has('doctor')) {
+            diagnosis ??= Promise.all([status(true), engineDoctor()]).finally(() => { diagnosis = undefined })
+            try {
+              const [state, checks] = await diagnosis
+              json(res, 200, { ...state, checks })
+            } catch {
+              json(res, 503, { error: '无法完成环境检测，请重试。' })
+            }
           } else {
             json(res, 200, await status())
           }
           return
         }
         if (req.method === 'POST' && url.searchParams.get('setup') === 'install') {
-          if (!canInstallEngine()) {
-            json(res, 409, { error: '当前环境需要手动配置排版引擎。' })
+          if (url.searchParams.get('confirm') !== '1') {
+            json(res, 400, { error: '请先在面板确认安装信息。' })
             return
           }
-          if (setup?.state !== 'installing') {
-            setup = { state: 'installing', stage: 'check' }
-            void installEngine(update => { Object.assign(setup, update) }).then(
-              () => { setup = { state: 'ready' } },
-              error => { setup = { state: 'error', error: error.message } },
-            )
+          if (!canInstallEngine()) {
+            json(res, 409, { error: '当前环境暂不支持自动安装排版引擎。' })
+            return
           }
+          if (active) {
+            json(res, 409, { error: '请等当前翻译结束后再准备排版引擎。' })
+            return
+          }
+          startSetup()
           json(res, 202, await status())
           return
         }
@@ -153,7 +175,7 @@ export function apply(ctx) {
         try {
           const options = readOptions(url)
           const returnFilePath = url.searchParams.get('delivery') === 'path'
-          if (setup?.state === 'installing' || !await engineAvailable()) {
+          if (setup?.state === 'installing' || !(await engineHealth()).ok) {
             throw new Error('PDF 排版引擎尚未就绪。请先在翻译面板完成安装。')
           }
           const route = await resolveModel(ctx, url.searchParams)

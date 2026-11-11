@@ -1,105 +1,196 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, existsSync } from 'node:fs'
+import { constants, readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { access, open, readdir, stat, writeFile } from 'node:fs/promises'
+import { access, open, readdir, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import os from 'node:os'
 
-const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
-const engineDir = path.join(local, 'DshPdfTranslate', 'engine-2.10.2')
-const runtimeDir = path.join(local, 'DshPdfTranslate', 'bundle-0.1.3')
-const upstreamDir = path.join(local, 'DshPdfTranslate', 'upstream-2.10.2-babeldoc-0.7.1')
-const upstreamDownload = upstreamDir + '.zip'
-const upstreamBytes = 607_049_119
+export const engineConfig = JSON.parse(readFileSync(new URL('./engine-config.json', import.meta.url), 'utf8'))
+export const engineRoot = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'DshPdfTranslate')
+const engineDir = path.join(engineRoot, 'engine-' + engineConfig.pdf2zh)
+const engineAssets = path.join(engineRoot, 'assets-' + engineConfig.babeldoc)
+const runner = fileURLToPath(new URL('./pdf-progress.py', import.meta.url))
+const engineSetupScript = fileURLToPath(new URL('./setup-engine.ps1', import.meta.url))
+const offlineDigest = engineConfig.offlineRuntimeSha256
 
 export function canInstallEngine() {
-  return process.platform === 'win32' && process.arch === 'x64' && !process.env.DSH_PDF2ZH_PATH
+  return process.platform === 'win32' && process.arch === 'x64' &&
+    process.env.PROCESSOR_ARCHITEW6432?.toUpperCase() !== 'ARM64' && !process.env.DSH_PDF2ZH_PATH
 }
 
 export function hasBundledEngine() {
-  return canInstallEngine() && existsSync(fileURLToPath(new URL('./runtime/win32-x64.zip', import.meta.url)))
-}
-
-export async function engineSetupProgress() {
-  const downloaded = (await stat(upstreamDownload).catch(() => null))?.size ?? 0
-  return { downloaded: Math.min(downloaded, upstreamBytes), total: upstreamBytes }
+  return canInstallEngine() && /^[a-f0-9]{64}$/.test(offlineDigest ?? '')
 }
 
 function accessible(file, mode) {
   return access(file, mode).then(() => true, () => false)
 }
 
-async function selectedEngine() {
-  if (canInstallEngine()) {
-    for (const directory of [runtimeDir, upstreamDir]) {
-      const executable = path.join(directory, 'python', 'python.exe')
-      const assets = path.join(directory, 'assets')
-      if (await accessible(executable) &&
-          await accessible(path.join(assets, 'models', 'doclayout_yolo_docstructbench_imgsz1024.onnx'))) {
-        return { executable, assets, managed: true }
-      }
-    }
-    const executable = path.join(engineDir, 'Scripts', 'python.exe')
-    if (!await accessible(engineDir + '.installing') && await accessible(executable) &&
-        await accessible(path.join(engineDir, 'Scripts', 'pdf2zh_next.exe'))) {
-      return { executable, managed: true }
-    }
-    return null
+function engineEnvironment(engine) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^(PDF2ZH_|PDF_TRANSLATE_|DSH_PDF_(?:ASSETS|ASSET_MIRROR|RESTORE_ASSETS|BUNDLED_ASSETS)$)/i.test(key)))
+  env.NO_PROXY = [env.NO_PROXY || env.no_proxy, '127.0.0.1', 'localhost'].filter(Boolean).join(',')
+  env.no_proxy = env.NO_PROXY
+  env.PYTHONUTF8 = '1'
+  if (engine.assets) {
+    env.DSH_PDF_ASSETS = engine.assets
+    env.HF_ENDPOINT ||= engineConfig.assetMirror
+    env.HF_HUB_DISABLE_TELEMETRY = '1'
   }
-  const command = process.env.DSH_PDF2ZH_PATH || 'pdf2zh_next'
-  if (path.isAbsolute(command)) return await accessible(command, constants.X_OK) ? { executable: command } : null
-  const name = process.platform === 'win32' && !path.extname(command) ? command + '.exe' : command
-  const directories = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
-  const candidates = await Promise.all(directories.map(directory => accessible(path.join(directory, name), constants.X_OK)))
-  return candidates.some(Boolean) ? { executable: command } : null
+  return env
 }
 
-export async function engineAvailable() {
-  return Boolean(await selectedEngine())
+async function engineCandidates() {
+  if (canInstallEngine()) {
+    const managed = await accessible(engineDir + '.installing') ? [] : [{
+      executable: path.join(engineDir, 'Scripts', 'python.exe'), assets: engineAssets,
+    }]
+    // Reuse working runtimes installed by earlier releases.
+    for (const directory of ['upstream-2.10.2-babeldoc-0.7.1', 'bundle-0.1.3']) {
+      const root = path.join(engineRoot, directory)
+      managed.push({ executable: path.join(root, 'python', 'python.exe'), assets: path.join(root, 'assets') })
+    }
+    if (hasBundledEngine()) {
+      const bundled = path.join(engineRoot, 'offline-' + offlineDigest.slice(0, 12))
+      const installOnTarget = engineConfig.offlineRuntimeFormat === 'installer'
+      if (!installOnTarget || await accessible(path.join(bundled, '.ready'))) {
+        const python = installOnTarget ? 'engine/Scripts/python.exe' : 'python/python.exe'
+        managed.unshift({ executable: path.join(bundled, python), assets: path.join(bundled, 'assets') })
+      }
+    }
+    return managed
+  }
+
+  const command = process.env.DSH_PDF2ZH_PATH || 'pdf2zh_next'
+  if (path.isAbsolute(command)) return [{ executable: command }]
+  const name = process.platform === 'win32' && !path.extname(command) ? command + '.exe' : command
+  const directories = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
+  return directories.map(directory => ({ executable: path.resolve(directory.replace(/^"|"$/g, ''), name) }))
+}
+
+async function probeEngine() {
+  const expected = engineConfig.pdf2zh
+  let failure = { ok: false, expected, reason: 'missing' }
+  for (const engine of await engineCandidates()) {
+    if (!await accessible(engine.executable, constants.X_OK)) continue
+    try {
+      const args = engine.assets ? ['-I', '-B', runner, '--dsh-health'] : ['--version']
+      const child = spawn(engine.executable, args, {
+        env: engineEnvironment(engine), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        signal: AbortSignal.timeout(8000),
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.setEncoding('utf8').on('data', chunk => { stdout = (stdout + chunk).slice(-4096) })
+      child.stderr.setEncoding('utf8').on('data', chunk => { stderr = (stderr + chunk).slice(-4096) })
+      const [code] = await once(child, 'close')
+      if (code !== 0) throw new Error('Engine version check failed')
+      const report = engine.assets ? JSON.parse(stdout.trim().split(/\r?\n/).at(-1)) : {
+        version: (stdout + stderr).match(/\b(\d+\.\d+\.\d+(?:[-+.\w]*))\b/)?.[1],
+      }
+      const health = { expected, version: report.version, babeldoc: report.babeldoc, resources: report.resources }
+      if (report.version !== expected || (engine.assets && report.babeldoc !== engineConfig.babeldoc)) {
+        if (failure.reason === 'missing') failure = { ...health, ok: false, reason: 'version' }
+      } else if (report.resources === false) {
+        if (failure.reason === 'missing') failure = { ...health, ok: false, reason: 'assets' }
+      } else {
+        return { ...health, ok: true, engine }
+      }
+    } catch {
+      if (failure.reason === 'missing') failure = { ok: false, expected, reason: 'broken' }
+    }
+  }
+  return failure
+}
+
+let healthCache
+let healthPending
+
+export async function engineHealth(refresh = false) {
+  if (!refresh && healthCache?.until > Date.now()) return healthCache.result
+  if (healthPending) return healthPending
+  healthPending = probeEngine().then(result => {
+    healthCache = { result, until: Date.now() + (result.ok ? 20_000 : 3000) }
+    return result
+  }).finally(() => { healthPending = undefined })
+  return healthPending
+}
+
+function setupProcess(args) {
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'))
+  env.PSModulePath = path.join(path.dirname(powershell), 'Modules')
+  env.LOCALAPPDATA = path.dirname(engineRoot)
+  return spawn(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', engineSetupScript, ...args], {
+    env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+  })
 }
 
 export async function installEngine(onStage) {
   const errors = {
-    check: '无法准备安装目录。请检查当前用户目录的写入权限和可用空间。',
-    download: '无法下载 PDFMathTranslate-next 官方排版包。请确认可以访问 GitHub Releases 后重试。',
-    bundled: '无法解包插件自带的排版组件。请检查当前用户目录的写入权限和可用空间后重试。',
-    unpack: '无法解包官方排版组件。请检查当前用户目录的写入权限和可用空间后重试。',
-    verify: '排版引擎安装后未能启动。请重试安装。',
-    locked: '另一个窗口正在安装排版引擎。请稍后重试。',
+    'unsupported-arch': '此安装包仅支持 Windows x64（AMD64）。',
+    check: '无法准备安装目录，请检查当前用户目录的写入权限和剩余空间。',
+    bundled: '无法校验或解包内置排版引擎。请检查安装包完整性和可用磁盘空间。',
+    'python-download': '暂时无法下载便携 Python。请检查网络后重试。',
+    'python-archive': '无法准备便携 Python。请检查安装目录的权限和可用空间后重试。',
+    venv: '无法创建 Python 环境，请检查写入权限和剩余空间。',
+    dependencies: hasBundledEngine()
+      ? '无法安装包内 Python 依赖。请检查压缩包完整性和可用磁盘空间。'
+      : '无法安装 Python 依赖。请检查网络后重试。',
+    assets: '排版资源准备失败。请检查网络后重试，插件会复用已校验的资源。',
+    verify: '已准备的引擎未通过自检。请运行环境诊断后重试。',
+    locked: '另一个窗口正在安装排版引擎，请稍后重试。',
   }
   const reasons = {
-    checksum: '下载文件校验失败。', disk: '下载目录无法写入，请检查磁盘空间。',
-    timeout: '下载长时间没有数据或超过时间上限。', network: '下载连接失败或中断。',
+    checksum: '文件校验失败。', disk: '可用磁盘空间不足。', timeout: '下载或安装长时间无响应。',
+    network: '网络连接失败。', missing: '软件源缺少适用的依赖。',
+    permission: '当前用户没有写入权限。', busy: '安装目录中的文件正被其他进程占用。',
   }
-  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  const script = fileURLToPath(new URL('./setup-engine.ps1', import.meta.url))
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'))
-  env.PSModulePath = path.join(path.dirname(powershell), 'Modules')
-  env.LOCALAPPDATA = local
-  const child = spawn(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
-    env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
-  })
+  const child = setupProcess(['-Yes'])
   let stage = 'check'
   let issue
+  const upstreams = {}
   const progress = createInterface({ input: child.stdout })
   progress.on('line', line => {
-    const match = /^DSH_PDF_SETUP (check|download|bundled|unpack|verify|locked|issue)(?: (\w+))?$/.exec(line)
+    const upstream = /^DSH_PDF_SETUP upstream (fonts|model) (github|huggingface|modelscope)$/.exec(line)
+    if (upstream) {
+      upstreams[upstream[1]] = upstream[2]
+      onStage({ upstreams: { ...upstreams } })
+      return
+    }
+    const match = /^DSH_PDF_SETUP (unsupported-arch|check|bundled|python-download|python-archive|venv|dependencies|assets|verify|locked|issue)(?: ([\w-]+))?$/.exec(line)
     if (!match) return
-    const [, event, reason] = match
-    if (event === 'issue') issue = reasons[reason]
-    else {
+    const [, event, detail] = match
+    if (event === 'issue') {
+      issue = reasons[detail]
+      onStage({ issue })
+    } else {
+      if (event !== stage) issue = undefined
       stage = event
-      onStage({ stage })
+      onStage({ stage, source: detail, issue })
     }
   })
   const [code] = await once(child, 'close').catch(() => { throw new Error('无法启动 Windows PowerShell。') })
-  if (code !== 0 || !await engineAvailable()) {
-    throw new Error((stage === 'download' ? issue ?? '' : '') + errors[stage])
-  }
+  healthCache = undefined
+  if (code !== 0 || !(await engineHealth(true)).ok) throw new Error((issue ?? '') + errors[stage])
+}
+
+export async function engineDoctor() {
+  const checks = {}
+  if (!canInstallEngine()) return checks
+  const child = setupProcess(['-Doctor'])
+  const lines = createInterface({ input: child.stdout })
+  lines.on('line', line => {
+    const result = /^DSH_PDF_DOCTOR (python|pythonVersion|write|pip|assets) ([\w.-]+)$/.exec(line)
+    if (result) checks[result[1]] = result[2]
+  })
+  const [code] = await once(child, 'close')
+  if (code !== 0) throw new Error('无法完成环境检测，请重试。')
+  return checks
 }
 
 export function json(res, status, data) {
@@ -193,8 +284,10 @@ async function openModelBridge(route, signal, results, onUpdate) {
         model: 'harness-pdf',
         choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
       })
-    } catch {
+    } catch (error) {
       if (key) results.failed.add(key)
+      const kind = /^(?:AbortError|TimeoutError|TypeError)$/.test(error?.name) ? error.name : 'request_failed'
+      console.warn('[dsh-pdf-paper-translator] Model bridge: ' + kind)
       if (!res.destroyed) json(res, 502, { error: { message: 'Harness model translation failed' } })
     }
   })
@@ -211,17 +304,11 @@ async function openModelBridge(route, signal, results, onUpdate) {
 }
 
 async function runPdf2zh(args, directory, signal, onUpdate) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !/^(PDF2ZH_|DSH_PDF_BUNDLED_ASSETS$)/i.test(key)))
-  env.NO_PROXY = [env.NO_PROXY || env.no_proxy, '127.0.0.1', 'localhost'].filter(Boolean).join(',')
-  env.no_proxy = env.NO_PROXY
-  env.PYTHONUTF8 = '1'
-  const engine = await selectedEngine()
-  if (!engine) throw new Error('找不到 PDF 排版引擎。请返回翻译面板检查安装状态。')
-  const runner = fileURLToPath(new URL('./pdf-progress.py', import.meta.url))
-  if (engine.assets) env.DSH_PDF_BUNDLED_ASSETS = engine.assets
-  const commandArgs = engine.managed ? ['-u', ...(engine.assets ? ['-I', '-B', '-X', 'utf8'] : []), runner, ...args] : args
-  if (!engine.managed) onUpdate({ stage: 'process' })
+  const { engine } = await engineHealth()
+  if (!engine) throw new Error('找不到可用的 PDF 排版引擎。请返回翻译面板检查安装状态。')
+  const env = engineEnvironment(engine)
+  const commandArgs = engine.assets ? ['-u', '-I', '-B', '-X', 'utf8', runner, ...args] : args
+  if (!engine.assets) onUpdate({ stage: 'process' })
   const child = spawn(engine.executable, commandArgs, {
     cwd: directory, env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -264,6 +351,7 @@ export async function translatePdf(directory, options, route, signal, onUpdate =
     const args = [
       input, '--config-file', config, '--output', directory, '--report-interval', '1',
       '--lang-in', 'auto', '--lang-out', options.target,
+      '--primary-font-family', 'serif',
       '--ignore-cache', '--no-auto-extract-glossary', '--qps', '2', '--pool-max-workers', '2',
       '--openaicompatible', '--openai-compatible-base-url', bridge.baseUrl,
       '--openai-compatible-api-key', bridge.token, '--openai-compatible-model', 'harness-pdf',
@@ -282,7 +370,7 @@ export async function translatePdf(directory, options, route, signal, onUpdate =
       }
       if (/password|encrypt/i.test(diagnostics)) throw new Error('请上传已解锁的 PDF。')
       if (/download|asset|font|onnx/i.test(diagnostics)) {
-        throw new Error('排版引擎未能加载模型或字体资源。请检查网络后重试。')
+        throw new Error('排版引擎未能加载模型或字体。请在面板中运行环境检测并修复引擎。')
       }
       throw new Error('排版引擎未生成可下载的 PDF。请检查 PDF 和页码范围后重试。')
     }

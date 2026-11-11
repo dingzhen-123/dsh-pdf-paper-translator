@@ -1,6 +1,6 @@
 {
   "name": "dsh-pdf-paper-translator",
-  "version": "0.1.5",
+  "version": "0.1.9",
   "type": "module",
   "license": "AGPL-3.0-only",
   "description": "Translate research papers and save PDF files from the DeepSeek Harness desktop sidebar.",
@@ -15,7 +15,12 @@
     "./locale/*.json": "./plugins/pdf-paper-translator/locale/*.json"
   },
   "files": [
+    "LICENSE",
+    "NOTICE",
+    "THIRD-PARTY.md",
+    "third-party/fonts-licenses/*.txt",
     "plugins/pdf-paper-translator/README.md",
+    "plugins/pdf-paper-translator/engine-config.json",
     "plugins/pdf-paper-translator/index.js",
     "plugins/pdf-paper-translator/engine.js",
     "plugins/pdf-paper-translator/pdf-progress.py",
