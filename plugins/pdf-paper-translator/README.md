@@ -14,6 +14,8 @@
 
 插件在本机调用 PDFMathTranslate-next / BabelDOC 解析页面并重排译文，尽量保留公式和图表。排版引擎通过仅绑定回环地址的一次性接口，把待译文本交给本次选择的模型。PDF 文件交给本机排版进程，提取出的文本由该模型服务处理，使用量由所选模型提供方计入。
 
+检测到的参考文献章节保留原文。同一台电脑可以复用此前生成的译文缓存，公开安装包不含个人缓存。
+
 单份文件最大 60 MB。任务的中间文件保存在系统临时目录，处理完成后清理。手动开始的任务请保持翻译面板打开。扫描件需先 OCR。复杂版面、带密码的文件和损坏的 PDF 可能需要先行处理。
 
 ## Windows 安装
@@ -88,7 +90,7 @@ $env:DSH_PDF_ASSETS = Join-Path $root 'assets-0.7.1'
 
 ### 外部引擎
 
-也可在启动 Harness 前把 `DSH_PDF2ZH_PATH` 设为兼容的 `pdf2zh_next` 可执行文件的绝对路径。外部引擎须报告 2.10.2，资源由其安装程序准备。插件使用 `--lang-in`、`--lang-out`、`--primary-font-family`、`--pages`、`--openaicompatible`、`--no-mono`、`--no-dual`、`--use-alternating-pages-dual` 等命令行参数，完整调用见 `engine.js`。
+也可在启动 Harness 前把 `DSH_PDF2ZH_PATH` 设为兼容的 `pdf2zh_next` 可执行文件的绝对路径。外部引擎须报告 2.10.2，资源由其安装程序准备。插件使用 `--lang-in`、`--lang-out`、`--pages`、`--openaicompatible`、`--no-mono`、`--no-dual`、`--use-alternating-pages-dual` 等命令行参数，完整调用见 `engine.js`。
 
 macOS 或 Linux 可用本机 Python 3.10–3.13 创建虚拟环境，在其中安装 `pdf2zh-next==2.10.2` 和 `BabelDOC==0.7.1`，再运行虚拟环境中的 `pdf2zh_next --warmup --disable-config-auto-save`。预热完成后，把 `DSH_PDF2ZH_PATH` 指向虚拟环境的 `bin/pdf2zh_next`。
 

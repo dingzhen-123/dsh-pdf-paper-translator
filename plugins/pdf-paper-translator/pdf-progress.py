@@ -8,6 +8,7 @@ import os
 import sys
 from importlib.metadata import version
 from pathlib import Path
+from runpy import run_path
 
 if assets_path := os.environ.get("DSH_PDF_ASSETS"):
     from babeldoc import const
@@ -94,6 +95,14 @@ async def main():
             logging.error("PDF translation: %s", event.get("error", "unknown error"))
             return 1
     return 1
+
+
+if __name__ in {"__main__", "__mp_main__"} and not any(arg.startswith("--dsh-") for arg in sys.argv[1:]):
+    # 参考文献过滤是增强项：装不上就退化成整篇翻译，不能让任务直接崩。
+    try:
+        run_path(str(Path(__file__).with_name("reference-layout.py")))["install_reference_filter"]()
+    except Exception as error:  # noqa: BLE001
+        print(f"[dsh-pdf] 参考文献过滤未启用：{type(error).__name__}: {error}", flush=True)
 
 
 if __name__ == "__main__":

@@ -29,16 +29,60 @@ function readOptions(url) {
   return { target, mode, pages }
 }
 
+// 推理等级的固定顺序，与 Harness 的 THINKING_LEVELS 一致（由低到高）。
+const EFFORT_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * 选出本次调用要用的推理等级。
+ *
+ * 翻译是逐段改写，不是推理题：思考过程对译文没有任何帮助，却会按输出 token 计费，
+ * 实测把输出放大 5–7 倍。因此默认钉在该模型支持的最低档，而不是跟随聊天里的设置——
+ * 跟随会带来隐性成本，用户把聊天切到 High，翻译就悄悄贵几倍。
+ *
+ * 只有在确实需要时（某模型最低档译文质量不佳）才用 DSH_PDF_EFFORT 或 ?effort= 手动抬高。
+ */
+function pickEffort(requested, levels) {
+  // 显式指定优先，且不按 levels 过滤。部分 provider 不上报 efforts 列表却照样接受
+  // 这个字段；先过滤会让 ?effort=off / DSH_PDF_EFFORT 整个失效（表现为 effort=default）。
+  for (const candidate of requested) {
+    if (candidate) return candidate
+  }
+  if (!levels.length) return ''
+  return EFFORT_ORDER.find(level => levels.includes(level)) ?? levels[0]
+}
+
 async function resolveModel(ctx, params) {
+  let current = null
+  try { current = await ctx.agentDefaultModel.currentSelection() } catch { /* 忽略 */ }
   const selection = params.has('provider') || params.has('model')
     ? { provider: params.get('provider'), model: params.get('model') }
-    : ctx.agentDefaultModel.currentSelection()
-  if (!selection?.provider || !selection.model ||
-      !ctx.llm.listProviders().some(provider => provider.id === selection.provider) ||
-      !(await ctx.llm.listModels(selection.provider)).some(model => model.id === selection.model)) {
+    : current
+  if (!selection?.provider || !selection.model) {
     throw new Error('所选模型当前不可用，请重新选择 Harness 模型。')
   }
-  return { llm: ctx.llm, provider: selection.provider, model: selection.model }
+  const models = await ctx.llm.listModels(selection.provider)
+  const info = models.find(model => model.id === selection.model)
+  if (!ctx.llm.listProviders().some(provider => provider.id === selection.provider) || !info) {
+    throw new Error('所选模型当前不可用，请重新选择 Harness 模型。')
+  }
+  const route = { llm: ctx.llm, provider: selection.provider, model: selection.model }
+  // 模型自报的可选等级；不支持推理的模型这里是空数组，不带该字段。
+  const levels = Array.isArray(info.reasoning?.efforts)
+    ? info.reasoning.efforts.map(item => item.id)
+    : []
+  const effort = pickEffort([params.get('effort'), process.env.DSH_PDF_EFFORT], levels)
+  if (effort) {
+    route.reasoningEffort = effort
+  } else if (!levels.length) {
+    // provider 没上报可选档位时，仍然显式要求关思考。留空会落到模型默认推理档，
+    // 实测输出被放大 5–7 倍，是换机后 token 暴涨的主因。
+    // 若该 provider 不接受这个字段，callModel 会收到报错并自动去字段重跑一次。
+    route.reasoningEffort = process.env.DSH_PDF_EFFORT_FALLBACK || 'off'
+  }
+  // 仅用于日志：把“面板所选的模型”与“实际下发给模型的参数”留痕，便于核对路由。
+  route.efforts = levels
+  route.modelName = info.name || selection.model
+  return route
 }
 
 async function resolveFolder(value) {
@@ -93,7 +137,7 @@ export function apply(ctx) {
       if (bundledEngine && !setup && !health.ok) startSetup()
       return {
         engine: health.ok === true, health, autoInstall: canInstallEngine(), bundledEngine, setup, outputFolder: DEFAULT_FOLDER,
-        engineLocation: engineRoot, engineVersion: engineConfig.pdf2zh, babeldocVersion: engineConfig.babeldoc,
+        engineLocation: engineRoot, engineVersion: engineConfig.pdf2zh, babeldocVersion: engineConfig.babeldoc, busy: Boolean(active),
       }
     }
     const unregister = ctx.webServer.register({
@@ -108,7 +152,9 @@ export function apply(ctx) {
         const url = new URL(req.url, 'http://127.0.0.1')
         const jobId = url.searchParams.get('job')
         if (req.method === 'GET') {
-          if (jobId) {
+          if (url.searchParams.get('slot') === '1') {
+            json(res, 200, { busy: Boolean(active) })
+          } else if (jobId) {
             if (latestJob?.id === jobId) json(res, 200, latestJob)
             else json(res, 404, { error: '找不到该翻译任务。' })
           } else if (url.searchParams.has('doctor')) {
@@ -175,9 +221,7 @@ export function apply(ctx) {
         try {
           const options = readOptions(url)
           const returnFilePath = url.searchParams.get('delivery') === 'path'
-          if (setup?.state === 'installing' || !(await engineHealth()).ok) {
-            throw new Error('PDF 排版引擎尚未就绪。请先在翻译面板完成安装。')
-          }
+          if (setup?.state === 'installing' || !(await engineHealth()).ok) throw new Error('PDF 排版引擎尚未就绪。请先在翻译面板完成安装。')
           const route = await resolveModel(ctx, url.searchParams)
           const folder = returnFilePath || url.searchParams.has('folder')
             ? await resolveFolder(url.searchParams.get('folder') ?? '')

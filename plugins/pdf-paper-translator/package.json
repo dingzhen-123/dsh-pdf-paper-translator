@@ -1,6 +1,6 @@
 {
   "name": "dsh-pdf-paper-translator",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -16,13 +16,30 @@
     "./icon": "./icon.svg",
     "./locale/*.json": "./locale/*.json"
   },
-  "files": ["index.js", "engine.js", "engine-config.json", "pdf-progress.py", "client.js", "icon.svg", "locale/*.json", "cordis.patch.yml", "setup-engine.ps1"],
+  "files": [
+    "index.js",
+    "engine.js",
+    "engine-config.json",
+    "pdf-progress.py",
+    "pdf-slim.py",
+    "pdf-tail.py",
+    "reference-layout.py",
+    "client.js",
+    "icon.svg",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "setup-engine.ps1"
+  ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "external": ["@deepseek-ai/dsh-client-ui-primitives"]
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
     }
   }
 }

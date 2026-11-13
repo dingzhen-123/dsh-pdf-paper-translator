@@ -12,7 +12,7 @@
 | DocLayout-YOLO ONNX | BabelDOC 0.7.1 资源清单中的固定摘要 | [Apache-2.0 原权重](https://huggingface.co/juliozhao/DocLayout-YOLO-DocStructBench) · [ONNX 转换版](https://huggingface.co/wybxc/DocLayout-YOLO-DocStructBench-onnx) | 版面识别 |
 | 字体和字符映射 | BabelDOC 0.7.1 资源清单中的固定摘要 | [BabelDOC 字体来源](https://github.com/funstory-ai/BabelDOC-Assets#fonts-and-licenses) · [Adobe CMap 许可](https://github.com/adobe-type-tools/cmap-resources/blob/master/LICENSE.md) | 字体嵌入和字符映射 |
 
-运行时使用 BabelDOC 自带资源清单的文件名和 SHA3-256，插件默认采用 `serif` 译文字体族。各 Python 依赖的实际安装版本可以用引擎虚拟环境中的 Python 执行 `-m pip list` 核对。
+运行时使用 BabelDOC 自带资源清单的文件名和 SHA3-256。各 Python 依赖的实际安装版本可以用引擎虚拟环境中的 Python 执行 `-m pip list` 核对。
 
 ## 字体资源来源
 
